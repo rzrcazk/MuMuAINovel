@@ -4,7 +4,13 @@
 - 所有AI方法在请求前自动检查用户MCP配置
 - 如果有启用的MCP插件且有可用工具，自动发送tools
 - 通过 auto_mcp 参数控制是否启用自动工具加载
+
+任务模型路由支持：
+- 通过 task_model_config 配置不同任务类型使用的模型
+- 调用时传入 task_type 自动选择对应模型
+- 未配置或无 task_type 时回退到 default_model
 """
+import json
 from typing import Optional, AsyncGenerator, List, Dict, Any, Union
 
 from app.config import settings as app_settings
@@ -85,6 +91,7 @@ class AIService:
         user_id: Optional[str] = None,
         db_session: Optional[Any] = None,
         enable_mcp: bool = True,
+        task_model_config: Optional[Union[str, Dict[str, Any]]] = None,
     ):
         self.api_provider = normalize_provider(api_provider or app_settings.default_ai_provider)
         self.default_model = default_model or app_settings.default_model
@@ -92,14 +99,36 @@ class AIService:
         self.default_max_tokens = default_max_tokens or app_settings.default_max_tokens
         self.default_system_prompt = default_system_prompt
         self.config = config or default_config
-        
+
         # MCP配置
         self.user_id = user_id
         self.db_session = db_session
         self._enable_mcp = enable_mcp
         self._cached_tools: Optional[List[Dict]] = None
         self._tools_loaded = False
-        
+
+        # 任务模型路由: 旧格式 {task_type: model_name}，新格式 {task_type: {api_provider, api_key, api_base_url, model}}
+        self._task_model_config: Optional[Dict[str, str]] = None
+        self._task_provider_configs: Dict[str, Dict[str, str]] = {}
+        self._task_providers: Dict[str, Any] = {}
+        self._task_models: Dict[str, str] = {}
+
+        raw = task_model_config
+        if isinstance(raw, str) and raw:
+            try:
+                raw = json.loads(raw)
+            except (json.JSONDecodeError, TypeError):
+                raw = None
+        if isinstance(raw, dict):
+            for task_type, value in raw.items():
+                if isinstance(value, dict):
+                    self._task_provider_configs[task_type] = value
+                    if value.get("model"):
+                        self._task_models[task_type] = value["model"]
+                elif isinstance(value, str):
+                    self._task_model_config = self._task_model_config or {}
+                    self._task_model_config[task_type] = value
+
         self._openai_provider: Optional[OpenAIProvider] = None
         self._anthropic_provider: Optional[AnthropicProvider] = None
         self._gemini_provider: Optional[GeminiProvider] = None
@@ -122,6 +151,26 @@ class AIService:
         if self.api_provider == "gemini" and api_key:
             client = GeminiClient(api_key, api_base_url, self.config)
             self._gemini_provider = GeminiProvider(client)
+
+        # 初始化任务专属 provider
+        for _task_type, _cfg in self._task_provider_configs.items():
+            _ptype = normalize_provider(_cfg.get("api_provider"))
+            _key = _cfg.get("api_key")
+            _url = _cfg.get("api_base_url")
+            if not _ptype or not _key:
+                continue
+            try:
+                if _ptype == "openai":
+                    _client = OpenAIClient(_key, _url or "https://api.openai.com/v1", self.config)
+                    self._task_providers[_task_type] = OpenAIProvider(_client)
+                elif _ptype == "anthropic":
+                    _client = AnthropicClient(_key, _url, self.config)
+                    self._task_providers[_task_type] = AnthropicProvider(_client)
+                elif _ptype == "gemini":
+                    _client = GeminiClient(_key, _url, self.config)
+                    self._task_providers[_task_type] = GeminiProvider(_client)
+            except Exception as _e:
+                logger.warning(f"任务 {_task_type} 的专属 provider 初始化失败: {_e}")
 
     @property
     def enable_mcp(self) -> bool:
@@ -152,9 +201,33 @@ class AIService:
         # 更新加载状态，确保下次调用会重新检查
         self._tools_loaded = False
         logger.debug(f"🔧 MCP工具状态已重置: enable_mcp={self._enable_mcp}, _tools_loaded=False")
-    
-    def _get_provider(self, provider: Optional[str] = None) -> BaseAIProvider:
-        """获取对应的 Provider"""
+
+    def resolve_model(self, task_type: Optional[str] = None) -> str:
+        """
+        根据任务类型解析使用的模型
+
+        Args:
+            task_type: 任务类型，如 'main_generation', 'outline', 'rewriting' 等
+
+        Returns:
+            模型名称，如果没有匹配则回退到 default_model
+        """
+        if task_type:
+            if task_type in self._task_models:
+                logger.debug(f"🎯 任务模型路由: {task_type} -> {self._task_models[task_type]}")
+                return self._task_models[task_type]
+            if self._task_model_config:
+                model = self._task_model_config.get(task_type)
+                if model:
+                    logger.debug(f"🎯 任务模型路由(旧格式): {task_type} -> {model}")
+                    return model
+        return self.default_model
+
+    def _get_provider(self, provider: Optional[str] = None, task_type: Optional[str] = None) -> BaseAIProvider:
+        """获取对应的 Provider，任务类型有专属 provider 时优先使用"""
+        if task_type and task_type in self._task_providers:
+            logger.debug(f"🎯 使用任务专属 provider: {task_type}")
+            return self._task_providers[task_type]
         p = normalize_provider(provider or self.api_provider)
         if p == "openai" and self._openai_provider:
             return self._openai_provider
@@ -388,6 +461,7 @@ class AIService:
         auto_mcp: bool = True,
         handle_tool_calls: bool = True,
         mcp_max_rounds: Optional[int] = None,
+        task_type: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         生成文本（自动支持MCP工具）
@@ -427,10 +501,10 @@ class AIService:
         )
         
         try:
-            prov = self._get_provider(provider)
+            prov = self._get_provider(provider, task_type=task_type)
             response = await prov.generate(
                 prompt=prompt,
-                model=model or self.default_model,
+                model=model if model is not None else self.resolve_model(task_type),
                 temperature=temperature or self.default_temperature,
                 max_tokens=max_tokens or self.default_max_tokens,
                 system_prompt=system_prompt or self.default_system_prompt,
@@ -481,6 +555,7 @@ class AIService:
         tool_choice: Optional[str] = None,
         auto_mcp: bool = True,
         mcp_max_rounds: Optional[int] = None,
+        task_type: Optional[str] = None,
     ) -> AsyncGenerator[str, None]:
         """
         流式生成文本（自动支持MCP工具）
@@ -526,11 +601,11 @@ class AIService:
         
         try:
             # 流式生成（Provider 层处理工具调用）
-            prov = self._get_provider(provider)
+            prov = self._get_provider(provider, task_type=task_type)
             logger.debug(f"🔧 开始流式生成，provider={provider or self.api_provider}, tools_count={len(tools_to_use) if tools_to_use else 0}")
             async for chunk in prov.generate_stream(
                 prompt=prompt,
-                model=model or self.default_model,
+                model=model if model is not None else self.resolve_model(task_type),
                 temperature=temperature or self.default_temperature,
                 max_tokens=max_tokens or self.default_max_tokens,
                 system_prompt=system_prompt or self.default_system_prompt,
@@ -580,6 +655,7 @@ class AIService:
         model: Optional[str] = None,
         expected_type: Optional[str] = None,
         auto_mcp: bool = True,
+        task_type: Optional[str] = None,
     ) -> Union[Dict, List]:
         """
         带重试的 JSON 调用（自动支持MCP工具）
@@ -623,6 +699,7 @@ class AIService:
                     system_prompt=system_prompt,
                     auto_mcp=auto_mcp,
                     handle_tool_calls=True,
+                    task_type=task_type,
                 )
                 aggregate_usage.add(TokenUsage.from_response(result))
                 metrics.retry_count = attempt
@@ -703,10 +780,11 @@ def create_user_ai_service_with_mcp(
     db_session,
     system_prompt: Optional[str] = None,
     enable_mcp: bool = True,
+    task_model_config: Optional[Union[str, Dict[str, Any]]] = None,
 ) -> AIService:
     """
     创建支持MCP的用户AI服务
-    
+
     Args:
         api_provider: AI提供商
         api_key: API密钥
@@ -718,7 +796,8 @@ def create_user_ai_service_with_mcp(
         db_session: 数据库会话
         system_prompt: 系统提示词
         enable_mcp: 是否启用MCP工具
-        
+        task_model_config: 任务模型路由配置
+
     Returns:
         配置好的AIService实例
     """
@@ -733,4 +812,5 @@ def create_user_ai_service_with_mcp(
         user_id=user_id,
         db_session=db_session,
         enable_mcp=enable_mcp,
+        task_model_config=task_model_config,
     )

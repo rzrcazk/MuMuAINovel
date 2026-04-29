@@ -42,6 +42,7 @@ class Settings(Base):
     verification_resend_interval_seconds = Column(Integer, default=60, server_default="60", nullable=False, comment="验证码重发间隔（秒）")
 
     preferences = Column(Text, comment="其他偏好设置(JSON)")
+    task_model_config = Column(Text, comment="任务模型路由配置(JSON): {task_type: model_name}")
     created_at = Column(DateTime, server_default=func.now(), comment="创建时间")
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), comment="更新时间")
     

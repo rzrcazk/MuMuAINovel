@@ -144,6 +144,39 @@ async def get_user_ai_service(
     else:
         logger.debug(f"用户 {user.user_id} 没有配置MCP插件，禁用MCP")
     
+    # 解析 task_model_config: 将 {task_type: preset_id} 转换为 {task_type: {full config}}
+    resolved_task_model_config = None
+    if settings.task_model_config:
+        try:
+            raw_routing = json.loads(settings.task_model_config)
+            if isinstance(raw_routing, dict):
+                prefs = {}
+                if settings.preferences:
+                    try:
+                        prefs = json.loads(settings.preferences) or {}
+                    except Exception:
+                        pass
+                presets_list = prefs.get("api_presets", {}).get("presets", [])
+                preset_map = {p["id"]: p for p in presets_list if isinstance(p, dict) and "id" in p}
+
+                resolved = {}
+                for task_type, value in raw_routing.items():
+                    if isinstance(value, str) and value in preset_map:
+                        cfg = preset_map[value].get("config", {})
+                        resolved[task_type] = {
+                            "api_provider": cfg.get("api_provider"),
+                            "api_key": cfg.get("api_key"),
+                            "api_base_url": cfg.get("api_base_url"),
+                            "model": cfg.get("llm_model"),
+                        }
+                    elif isinstance(value, dict):
+                        resolved[task_type] = value
+                    # 旧格式字符串模型名: 忽略（回退到默认）
+                if resolved:
+                    resolved_task_model_config = resolved
+        except Exception as _e:
+            logger.warning(f"解析 task_model_config 失败: {_e}")
+
     # ✅ 使用支持MCP的工厂函数创建AI服务实例
     # 传递 user_id 和 db_session，使得 AIService 能够自动加载用户配置的MCP工具
     return create_user_ai_service_with_mcp(
@@ -157,6 +190,7 @@ async def get_user_ai_service(
         db_session=db,                 # ✅ 传递 db_session
         system_prompt=settings.system_prompt,
         enable_mcp=enable_mcp,         # 根据MCP插件状态动态决定
+        task_model_config=resolved_task_model_config,
     )
 
 

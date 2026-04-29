@@ -87,6 +87,7 @@ export interface Settings {
   cover_image_model?: string;
   cover_enabled?: boolean;
   preferences?: string;
+  task_model_config?: string;
   created_at: string;
   updated_at: string;
 }
@@ -105,6 +106,7 @@ export interface SettingsUpdate {
   cover_image_model?: string;
   cover_enabled?: boolean;
   preferences?: string;
+  task_model_config?: string;
 }
 
 // API预设相关类型定义

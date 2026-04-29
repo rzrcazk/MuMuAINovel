@@ -21,6 +21,7 @@ class SettingsBase(BaseModel):
     cover_image_model: Optional[str] = Field(default=None, description="封面图片模型名称")
     cover_enabled: Optional[bool] = Field(default=False, description="是否启用封面图片生成")
     preferences: Optional[str] = Field(default=None, description="其他偏好设置(JSON)")
+    task_model_config: Optional[str] = Field(default=None, description="任务模型路由配置(JSON)")
 
 
 class SettingsCreate(SettingsBase):

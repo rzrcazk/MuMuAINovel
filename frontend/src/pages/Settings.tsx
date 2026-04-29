@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
-import { Card, Form, Input, Button, Select, Slider, InputNumber, message, Space, Typography, Spin, Modal, Alert, Grid, Tabs, List, Tag, Popconfirm, Empty, Row, Col, theme } from 'antd';
-import { SaveOutlined, DeleteOutlined, ReloadOutlined, InfoCircleOutlined, CheckCircleOutlined, CloseCircleOutlined, ThunderboltOutlined, PlusOutlined, EditOutlined, CopyOutlined, WarningOutlined, PictureOutlined } from '@ant-design/icons';
+import { Card, Form, Input, Button, Select, Slider, InputNumber, message, Space, Typography, Spin, Modal, Alert, Grid, Tabs, List, Tag, Popconfirm, Empty, Row, Col, theme, Tooltip } from 'antd';
+import { SaveOutlined, DeleteOutlined, ReloadOutlined, InfoCircleOutlined, CheckCircleOutlined, CloseCircleOutlined, ThunderboltOutlined, PlusOutlined, EditOutlined, CopyOutlined, WarningOutlined, PictureOutlined, ClearOutlined, BranchesOutlined } from '@ant-design/icons';
 import { settingsApi, mcpPluginApi } from '../services/api';
 import type { SettingsUpdate, APIKeyPreset, PresetCreateRequest, APIKeyPresetConfig } from '../types';
 import { eventBus, EventNames } from '../store/eventBus';
@@ -9,6 +9,35 @@ const { Title, Text } = Typography;
 const { Option } = Select;
 const { useBreakpoint } = Grid;
 const { TextArea } = Input;
+
+const MODEL_HISTORY_KEY = 'mumu_model_history';
+const MAX_MODEL_HISTORY = 20;
+
+function loadModelHistory(): string[] {
+  try {
+    const raw = localStorage.getItem(MODEL_HISTORY_KEY);
+    if (raw) return JSON.parse(raw);
+  } catch { /* ignore */ }
+  return [];
+}
+
+function saveModelToHistory(model: string): void {
+  if (!model) return;
+  const history = loadModelHistory();
+  const next = [model, ...history.filter(m => m !== model)].slice(0, MAX_MODEL_HISTORY);
+  localStorage.setItem(MODEL_HISTORY_KEY, JSON.stringify(next));
+}
+
+function clearModelHistory(): void {
+  localStorage.removeItem(MODEL_HISTORY_KEY);
+}
+
+const TASK_TYPES = [
+  { key: 'main_generation', label: '章节生成', description: '主要章节内容生成' },
+  { key: 'outline', label: '大纲/情节展开', description: '大纲内容展开为章节计划' },
+  { key: 'rewriting', label: '章节重写', description: '章节内容重新生成或改写' },
+  { key: 'character_generation', label: '角色/组织生成', description: '角色和组织信息自动生成' },
+];
 
 export default function SettingsPage() {
   const { token } = theme.useToken();
@@ -24,6 +53,7 @@ export default function SettingsPage() {
   const [fetchingModels, setFetchingModels] = useState(false);
   const [modelsFetched, setModelsFetched] = useState(false);
   const [modelSearchText, setModelSearchText] = useState('');
+  const [modelHistory, setModelHistory] = useState<string[]>(loadModelHistory());
   const [testingApi, setTestingApi] = useState(false);
   const [testResult, setTestResult] = useState<{
     success: boolean;
@@ -59,6 +89,10 @@ export default function SettingsPage() {
   const [presetModelsFetched, setPresetModelsFetched] = useState(false);
   const [presetModelSearchText, setPresetModelSearchText] = useState('');
 
+  // 任务路由相关状态
+  const [taskRouting, setTaskRouting] = useState<Record<string, string | null>>({});
+  const [savingTaskRouting, setSavingTaskRouting] = useState(false);
+
   const pageBackground = `linear-gradient(180deg, ${token.colorBgLayout} 0%, ${token.colorFillSecondary} 100%)`;
   const headerBackground = `linear-gradient(135deg, ${token.colorPrimary} 0%, ${token.colorPrimaryHover} 100%)`;
 
@@ -72,6 +106,8 @@ export default function SettingsPage() {
 
   useEffect(() => {
     if (activeTab === 'presets') {
+      loadPresets();
+    } else if (activeTab === 'task_routing') {
       loadPresets();
     } else if (activeTab === 'current') {
       // 切换到当前配置Tab时，刷新设置以获取最新数据
@@ -96,6 +132,16 @@ export default function SettingsPage() {
         cover_image_model: settings.cover_image_model || defaultCoverSettings.cover_image_model,
         cover_enabled: settings.cover_enabled ?? defaultCoverSettings.cover_enabled,
       });
+
+      // 解析任务路由配置
+      if (settings.task_model_config) {
+        try {
+          const parsed = JSON.parse(settings.task_model_config);
+          if (typeof parsed === 'object' && parsed !== null) {
+            setTaskRouting(parsed);
+          }
+        } catch { /* ignore */ }
+      }
 
       // 判断是否为默认设置（id='0'表示来自.env的默认配置）
       if (settings.id === '0' || !settings.id) {
@@ -147,6 +193,10 @@ export default function SettingsPage() {
       }
       
       await settingsApi.saveSettings(values);
+      if (values.llm_model) {
+        saveModelToHistory(values.llm_model);
+        setModelHistory(loadModelHistory());
+      }
       message.success('设置已保存');
       setHasSettings(true);
       setIsDefaultSettings(false);
@@ -328,6 +378,22 @@ export default function SettingsPage() {
     // 清空模型列表，需要重新获取
     setModelOptions([]);
     setModelsFetched(false);
+  };
+
+  const handleSaveTaskRouting = async () => {
+    setSavingTaskRouting(true);
+    try {
+      const filtered: Record<string, string> = {};
+      for (const [k, v] of Object.entries(taskRouting)) {
+        if (v) filtered[k] = v;
+      }
+      await settingsApi.saveSettings({ task_model_config: JSON.stringify(filtered) });
+      message.success('任务路由配置已保存');
+    } catch {
+      message.error('保存任务路由配置失败');
+    } finally {
+      setSavingTaskRouting(false);
+    }
   };
 
   const coverApiProviders = [
@@ -648,6 +714,9 @@ export default function SettingsPage() {
         await settingsApi.createPreset(request);
         message.success('预设已创建');
       }
+
+      saveModelToHistory(values.llm_model);
+      setModelHistory(loadModelHistory());
 
       handlePresetCancel();
       loadPresets();
@@ -1153,27 +1222,58 @@ export default function SettingsPage() {
                           onFinish={handleSave}
                           autoComplete="off"
                         >
-                          <Form.Item
-                            label={
+                          <Form.Item name="api_provider" style={{ display: 'none' }}>
+                            <Input />
+                          </Form.Item>
+                          {/* 供应商卡片选择 */}
+                          <div style={{ marginBottom: 24 }}>
+                            <div style={{ marginBottom: 8, fontSize: 14, fontWeight: 500 }}>
                               <Space size={4}>
                                 <span>API 提供商</span>
                                 <InfoCircleOutlined
                                   title="选择你的AI服务提供商"
-                                  style={{ color: token.colorTextSecondary, fontSize: isMobile ? '12px' : '14px' }}
+                                  style={{ color: token.colorTextSecondary, fontSize: 14 }}
                                 />
                               </Space>
-                            }
-                            name="api_provider"
-                            rules={[{ required: true, message: '请选择API提供商' }]}
-                          >
-                            <Select size={isMobile ? 'middle' : 'large'} onChange={handleProviderChange}>
-                              {apiProviders.map(provider => (
-                                <Option key={provider.value} value={provider.value}>
-                                  {provider.label}
-                                </Option>
-                              ))}
-                            </Select>
-                          </Form.Item>
+                            </div>
+                            <Row gutter={[12, 12]}>
+                              {apiProviders.map(provider => {
+                                const isSelected = selectedProvider === provider.value;
+                                return (
+                                  <Col key={provider.value} xs={12} sm={8}>
+                                    <div
+                                      onClick={() => {
+                                        form.setFieldValue('api_provider', provider.value);
+                                        handleProviderChange(provider.value);
+                                      }}
+                                      style={{
+                                        padding: '12px 16px',
+                                        borderRadius: 10,
+                                        border: `2px solid ${isSelected ? token.colorPrimary : token.colorBorderSecondary}`,
+                                        background: isSelected ? token.colorPrimaryBg : token.colorBgContainer,
+                                        cursor: 'pointer',
+                                        transition: 'all 0.2s',
+                                        textAlign: 'center',
+                                        userSelect: 'none',
+                                      }}
+                                    >
+                                      <div style={{ fontSize: 22, marginBottom: 4 }}>
+                                        {provider.value === 'mumu' ? '🌸' :
+                                          provider.value === 'openai' ? '◯' : '◉'}
+                                      </div>
+                                      <div style={{
+                                        fontSize: 13,
+                                        fontWeight: isSelected ? 600 : 400,
+                                        color: isSelected ? token.colorPrimary : token.colorText,
+                                      }}>
+                                        {provider.label}
+                                      </div>
+                                    </div>
+                                  </Col>
+                                );
+                              })}
+                            </Row>
+                          </div>
 
                           {selectedProvider === 'mumu' && (
                             <Alert
@@ -1232,7 +1332,17 @@ export default function SettingsPage() {
                             name="api_base_url"
                             rules={[
                               { required: true, message: '请输入API地址' },
-                              { type: 'url', message: '请输入有效的URL' }
+                              () => ({
+                                validator(_rule, value) {
+                                  if (!value) return Promise.resolve();
+                                  // 接受 Docker 容器名（如 http://new-api:3000）的宽松 URL 校验
+                                  const urlPattern = /^https?:\/\/[a-zA-Z0-9._-]+(:\d+)?(\/[^\s]*)?$/;
+                                  if (!urlPattern.test(value.trim())) {
+                                    return Promise.reject(new Error('请输入有效的URL（例：http://new-api:3000）'));
+                                  }
+                                  return Promise.resolve();
+                                }
+                              })
                             ]}
                           >
                             <Input
@@ -1262,7 +1372,11 @@ export default function SettingsPage() {
                               loading={fetchingModels}
                               onFocus={handleModelSelectFocus}
                               onSearch={(value) => setModelSearchText(value)}
-                              onSelect={() => setModelSearchText('')}
+                              onSelect={(value) => {
+                                setModelSearchText('');
+                                saveModelToHistory(value);
+                                setModelHistory(loadModelHistory());
+                              }}
                               onBlur={() => setModelSearchText('')}
                               filterOption={(input, option) => {
                                 // 手动输入的选项始终显示
@@ -1273,6 +1387,24 @@ export default function SettingsPage() {
                               dropdownRender={(menu) => (
                                 <>
                                   {menu}
+                                  {modelHistory.length > 0 && !modelSearchText && !fetchingModels && (
+                                    <div style={{ padding: '4px 12px', borderTop: `1px solid ${token.colorBorderSecondary}`, display: 'flex', justifyContent: 'flex-end' }}>
+                                      <Button
+                                        type="link"
+                                        size="small"
+                                        icon={<ClearOutlined />}
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          clearModelHistory();
+                                          setModelHistory([]);
+                                          message.info('已清除模型历史记录');
+                                        }}
+                                        style={{ fontSize: '12px', color: token.colorTextSecondary }}
+                                      >
+                                        清除模型历史
+                                      </Button>
+                                    </div>
+                                  )}
                                   {fetchingModels && (
                                     <div style={{ padding: '8px 12px', color: token.colorTextSecondary, textAlign: 'center', fontSize: isMobile ? '12px' : '14px' }}>
                                       <Spin size="small" /> 正在获取模型列表...
@@ -1330,13 +1462,19 @@ export default function SettingsPage() {
                                 ) : undefined
                               }
                               options={(() => {
-                                const opts = modelOptions.map(model => ({
+                                const opts: Array<{ value: string; label: string; description: string }> = modelOptions.map(model => ({
                                   value: model.value,
                                   label: model.label,
                                   description: model.description
                                 }));
+                                // 添加历史记录中的模型（不在 API 列表中的）
+                                modelHistory.forEach(hm => {
+                                  if (!opts.some(o => o.value.toLowerCase() === hm.toLowerCase())) {
+                                    opts.push({ value: hm, label: hm, description: '历史记录' });
+                                  }
+                                });
                                 // 如果用户输入了文本且不在已有选项中，添加手动输入选项
-                                if (modelSearchText && !modelOptions.some(m =>
+                                if (modelSearchText && !opts.some(m =>
                                   m.value.toLowerCase() === modelSearchText.toLowerCase() ||
                                   m.label.toLowerCase() === modelSearchText.toLowerCase()
                                 )) {
@@ -1356,9 +1494,14 @@ export default function SettingsPage() {
                                         <EditOutlined style={{ color: token.colorPrimary }} />
                                         <span>使用 "{option.data.label}"</span>
                                       </Space>
+                                    ) : option.data.description === '历史记录' ? (
+                                      <Space size={4}>
+                                        <span style={{ color: token.colorTextSecondary }}>🕐</span>
+                                        <span>{option.data.label}</span>
+                                      </Space>
                                     ) : option.data.label}
                                   </div>
-                                  {option.data.description && option.data.description !== '手动输入的模型名称' && (
+                                  {option.data.description && option.data.description !== '手动输入的模型名称' && option.data.description !== '历史记录' && (
                                     <div style={{ fontSize: isMobile ? '11px' : '12px', color: token.colorTextTertiary, marginTop: '2px' }}>
                                       {option.data.description}
                                     </div>
@@ -1772,6 +1915,87 @@ export default function SettingsPage() {
                   ),
                 },
                 {
+                  key: 'task_routing',
+                  label: <Space size={6}><BranchesOutlined />任务路由</Space>,
+                  children: (
+                    <Space direction="vertical" size="large" style={{ width: '100%' }}>
+                      <Alert
+                        type="info"
+                        showIcon
+                        message="任务路由配置"
+                        description="为不同任务类型指定专属供应商和模型。从已配置的预设中选择，未指定的任务使用默认主力模型。"
+                      />
+
+                      {presets.length === 0 ? (
+                        <Empty
+                          description="暂无配置预设，请先在「配置预设」标签页中创建预设"
+                          image={Empty.PRESENTED_IMAGE_SIMPLE}
+                          style={{ margin: '40px 0' }}
+                        >
+                          <Button type="primary" onClick={() => setActiveTab('presets')}>
+                            前往创建预设
+                          </Button>
+                        </Empty>
+                      ) : (
+                        <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+                          {TASK_TYPES.map(task => {
+                            const selectedPresetId = taskRouting[task.key] || null;
+                            const selectedPreset = presets.find(p => p.id === selectedPresetId);
+                            return (
+                              <div key={task.key} style={{
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: 16,
+                                padding: '14px 16px',
+                                border: `1px solid ${token.colorBorderSecondary}`,
+                                borderRadius: 10,
+                                background: selectedPresetId ? token.colorInfoBg : token.colorBgContainer,
+                              }}>
+                                <div style={{ flex: '0 0 160px' }}>
+                                  <div style={{ fontWeight: 600, fontSize: 14 }}>{task.label}</div>
+                                  <div style={{ fontSize: 12, color: token.colorTextTertiary, marginTop: 2 }}>{task.description}</div>
+                                </div>
+                                <div style={{ flex: 1 }}>
+                                  <Select
+                                    style={{ width: '100%' }}
+                                    value={selectedPresetId || ''}
+                                    onChange={(val) => setTaskRouting(prev => ({ ...prev, [task.key]: val || null }))}
+                                    options={[
+                                      { value: '', label: '使用默认模型' },
+                                      ...presets.map(p => ({
+                                        value: p.id,
+                                        label: `${p.name} (${p.config.api_provider.toUpperCase()} / ${p.config.llm_model})`,
+                                      })),
+                                    ]}
+                                  />
+                                </div>
+                                {selectedPreset && (
+                                  <Tooltip title={`${selectedPreset.config.api_base_url || '默认地址'}`}>
+                                    <Tag color={getProviderColor(selectedPreset.config.api_provider)}>
+                                      {selectedPreset.config.api_provider.toUpperCase()}
+                                    </Tag>
+                                  </Tooltip>
+                                )}
+                              </div>
+                            );
+                          })}
+
+                          <div style={{ textAlign: 'right', marginTop: 8 }}>
+                            <Button
+                              type="primary"
+                              icon={<SaveOutlined />}
+                              loading={savingTaskRouting}
+                              onClick={handleSaveTaskRouting}
+                            >
+                              保存路由配置
+                            </Button>
+                          </div>
+                        </Space>
+                      )}
+                    </Space>
+                  ),
+                },
+                {
                   key: 'presets',
                   label: <Space size={6}><CopyOutlined />配置预设</Space>,
                   children: renderPresetsList(),
@@ -1913,7 +2137,11 @@ export default function SettingsPage() {
                     loading={fetchingPresetModels}
                     onFocus={handlePresetModelSelectFocus}
                     onSearch={(value) => setPresetModelSearchText(value)}
-                    onSelect={() => setPresetModelSearchText('')}
+                    onSelect={(value) => {
+                      setPresetModelSearchText('');
+                      saveModelToHistory(value);
+                      setModelHistory(loadModelHistory());
+                    }}
                     onBlur={() => setPresetModelSearchText('')}
                     filterOption={(input, option) => {
                       // 手动输入的选项始终显示
@@ -1924,6 +2152,24 @@ export default function SettingsPage() {
                     dropdownRender={(menu) => (
                       <>
                         {menu}
+                        {modelHistory.length > 0 && !presetModelSearchText && !fetchingPresetModels && (
+                          <div style={{ padding: '4px 12px', borderTop: `1px solid ${token.colorBorderSecondary}`, display: 'flex', justifyContent: 'flex-end' }}>
+                            <Button
+                              type="link"
+                              size="small"
+                              icon={<ClearOutlined />}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                clearModelHistory();
+                                setModelHistory([]);
+                                message.info('已清除模型历史记录');
+                              }}
+                              style={{ fontSize: '12px', color: token.colorTextSecondary }}
+                            >
+                              清除模型历史
+                            </Button>
+                          </div>
+                        )}
                         {fetchingPresetModels && (
                           <div style={{ padding: '8px 12px', color: token.colorTextSecondary, textAlign: 'center', fontSize: '12px' }}>
                             <Spin size="small" /> 正在获取模型列表...
@@ -1979,13 +2225,18 @@ export default function SettingsPage() {
                       </div>
                     }
                     options={(() => {
-                      const opts = presetModelOptions.map(model => ({
+                      const opts: Array<{ value: string; label: string; description: string }> = presetModelOptions.map(model => ({
                         value: model.value,
                         label: model.label,
                         description: model.description
                       }));
+                      modelHistory.forEach(hm => {
+                        if (!opts.some(o => o.value.toLowerCase() === hm.toLowerCase())) {
+                          opts.push({ value: hm, label: hm, description: '历史记录' });
+                        }
+                      });
                       // 如果用户输入了文本且不在已有选项中，添加手动输入选项
-                      if (presetModelSearchText && !presetModelOptions.some(m =>
+                      if (presetModelSearchText && !opts.some(m =>
                         m.value.toLowerCase() === presetModelSearchText.toLowerCase() ||
                         m.label.toLowerCase() === presetModelSearchText.toLowerCase()
                       )) {
@@ -2005,9 +2256,14 @@ export default function SettingsPage() {
                               <EditOutlined style={{ color: token.colorPrimary }} />
                               <span>使用 "{option.data.label}"</span>
                             </Space>
+                          ) : option.data.description === '历史记录' ? (
+                            <Space size={4}>
+                              <span style={{ color: token.colorTextSecondary }}>🕐</span>
+                              <span>{option.data.label}</span>
+                            </Space>
                           ) : option.data.label}
                         </div>
-                        {option.data.description && option.data.description !== '手动输入的模型名称' && (
+                        {option.data.description && option.data.description !== '手动输入的模型名称' && option.data.description !== '历史记录' && (
                           <div style={{ fontSize: '11px', color: token.colorTextTertiary, marginTop: '2px' }}>
                             {option.data.description}
                           </div>

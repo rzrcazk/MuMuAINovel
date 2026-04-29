@@ -27,6 +27,7 @@ from app.schemas.outline import (
     CreateChaptersFromPlansResponse
 )
 from app.services.ai_service import AIService
+from app.services.json_helper import loads_json
 from app.services.prompt_service import prompt_service, PromptService
 from app.services.memory_service import memory_service
 from app.services.plot_expansion_service import PlotExpansionService
@@ -850,7 +851,7 @@ def _parse_ai_response(ai_response: str, raise_on_error: bool = False) -> list:
         ai_service_temp = AIService()
         cleaned_text = ai_service_temp._clean_json_response(ai_response)
         
-        outline_data = json.loads(cleaned_text)
+        outline_data = loads_json(cleaned_text)
         
         # 确保是列表格式
         if not isinstance(outline_data, list):
@@ -1447,6 +1448,31 @@ async def continue_outline_generator(
                 message=f"🤖 调用AI生成第{str(batch_num + 1)}批..."
             )
             
+            # 获取伏笔提醒信息（用于大纲续写）
+            foreshadow_reminders_text = "暂无需要关注的伏笔"
+            try:
+                foreshadow_context = await foreshadow_service.build_chapter_context(
+                    db=db,
+                    project_id=project_id,
+                    chapter_number=current_start_chapter,
+                    include_pending=False,
+                    include_overdue=True,
+                    lookahead=10
+                )
+                if foreshadow_context and foreshadow_context.get("context_text"):
+                    foreshadow_reminders_text = foreshadow_context["context_text"]
+                    logger.info(f"✅ 大纲续写获取到伏笔提醒: {len(foreshadow_reminders_text)}字符")
+                    # 追加伏笔统计信息
+                    foreshadow_stats = await foreshadow_service.get_stats(db, project_id)
+                    if foreshadow_stats:
+                        planted = foreshadow_stats.get('planted', 0)
+                        resolved = foreshadow_stats.get('resolved', 0)
+                        partial = foreshadow_stats.get('partially_resolved', 0)
+                        pending = foreshadow_stats.get('pending', 0)
+                        foreshadow_reminders_text += f"\n【📊 伏笔统计】已埋设:{planted} 已回收:{resolved} 部分回收:{partial} 待埋入:{pending}"
+            except Exception as e:
+                logger.warning(f"⚠️ 获取大纲续写伏笔提醒失败: {str(e)}")
+
             # 使用标准续写提示词模板（简化版）
             template = await PromptService.get_template("OUTLINE_CONTINUE", user_id, db)
             prompt = PromptService.format_prompt(
@@ -1463,6 +1489,8 @@ async def continue_outline_generator(
                 # 上下文信息
                 recent_outlines=context['recent_outlines'],
                 characters_info=context['characters_info'],
+                # 伏笔提醒
+                foreshadow_reminders=foreshadow_reminders_text,
                 # 续写参数
                 chapter_count=current_batch_size,
                 start_chapter=current_start_chapter,

@@ -137,10 +137,11 @@ class PlotExpansionService:
         async for chunk in self.ai_service.generate_text_stream(
             prompt=prompt,
             provider=provider,
-            model=model
+            model=model,
+            task_type="outline",
         ):
             accumulated_text += chunk
-        
+
         # 提取内容
         ai_content = accumulated_text
         
@@ -266,7 +267,8 @@ class PlotExpansionService:
             async for chunk in self.ai_service.generate_text_stream(
                 prompt=prompt,
                 provider=provider,
-                model=model
+                model=model,
+                task_type="outline",
             ):
                 accumulated_text += chunk
             

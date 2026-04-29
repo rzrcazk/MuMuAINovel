@@ -114,6 +114,7 @@ class AutoCharacterService:
             character_data = await self.ai_service.call_with_json_retry(
                 prompt=prompt,
                 max_retries=2,  # 减少重试次数以加快速度
+                task_type="character_generation",
             )
             
             char_name = character_data.get('name', '未知')

@@ -93,6 +93,7 @@ class AutoOrganizationService:
             organization_data = await self.ai_service.call_with_json_retry(
                 prompt=prompt,
                 max_retries=3,
+                task_type="character_generation",
             )
             
             org_name = organization_data.get('name', '未知')

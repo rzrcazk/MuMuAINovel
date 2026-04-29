@@ -89,7 +89,8 @@ class ChapterRegenerator:
             async for chunk in self.ai_service.generate_text_stream(
                 prompt=full_prompt,
                 system_prompt=system_prompt_with_style,
-                temperature=0.7
+                temperature=0.7,
+                task_type="rewriting",
             ):
                 # 发送内容块
                 yield {'type': 'chunk', 'content': chunk}

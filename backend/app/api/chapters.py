@@ -1639,7 +1639,8 @@ async def generate_chapter_content_stream(
                     "prompt": prompt,
                     "system_prompt": system_prompt_with_style,
                     "tool_choice": "required",
-                    "max_tokens": calculated_max_tokens  # 添加 max_tokens 限制
+                    "max_tokens": calculated_max_tokens,  # 添加 max_tokens 限制
+                    "task_type": "main_generation",
                 }
                 if custom_model:
                     logger.info(f"  使用自定义模型: {custom_model}")
@@ -3176,7 +3177,8 @@ async def generate_single_chapter_for_batch(
         "prompt": prompt,
         "system_prompt": system_prompt_with_style,
         "tool_choice": "required",
-        "max_tokens": calculated_max_tokens  # 添加 max_tokens 限制
+        "max_tokens": calculated_max_tokens,  # 添加 max_tokens 限制
+        "task_type": "main_generation",
     }
     # 如果传入了自定义模型，使用指定的模型
     if custom_model:
@@ -3902,7 +3904,8 @@ async def partial_regenerate_stream(
             
             async for chunk in user_ai_service.generate_text_stream(
                 prompt=prompt,
-                max_tokens=calculated_max_tokens
+                max_tokens=calculated_max_tokens,
+                task_type="rewriting",
             ):
                 full_content += chunk
                 chunk_count += 1

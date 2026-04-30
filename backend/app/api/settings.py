@@ -503,7 +503,11 @@ async def get_available_models(
     """
     try:
         provider = normalize_provider(provider)
-        api_base_url = validate_public_http_url(api_base_url)
+        # 使用简化的 URL 校验，支持 Docker 容器地址（如 http://new-api:3000）
+        import re
+        if not re.match(r'^https?://[a-zA-Z0-9._:-]+(/.*)?$', api_base_url.strip()):
+            raise HTTPException(status_code=400, detail="请输入有效的 URL（支持 Docker 容器地址，如 http://new-api:3000）")
+        api_base_url = api_base_url.strip().rstrip("/")
         async with httpx.AsyncClient(timeout=10.0) as client:
             if provider == "openai" or provider == "azure" or provider == "custom":
                 # OpenAI 兼容接口获取模型列表

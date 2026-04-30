@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { Card, Form, Input, Button, Select, Slider, InputNumber, message, Space, Typography, Spin, Modal, Alert, Grid, Tabs, List, Tag, Popconfirm, Empty, Row, Col, theme, Tooltip } from 'antd';
-import { SaveOutlined, DeleteOutlined, ReloadOutlined, InfoCircleOutlined, CheckCircleOutlined, CloseCircleOutlined, ThunderboltOutlined, PlusOutlined, EditOutlined, CopyOutlined, WarningOutlined, PictureOutlined, ClearOutlined, BranchesOutlined } from '@ant-design/icons';
+import { SaveOutlined, DeleteOutlined, ReloadOutlined, InfoCircleOutlined, CheckCircleOutlined, CloseCircleOutlined, ThunderboltOutlined, PlusOutlined, EditOutlined, CopyOutlined, WarningOutlined, ClearOutlined, BranchesOutlined, PictureOutlined } from '@ant-design/icons';
 import { settingsApi, mcpPluginApi } from '../services/api';
 import type { SettingsUpdate, APIKeyPreset, PresetCreateRequest, APIKeyPresetConfig } from '../types';
 import { eventBus, EventNames } from '../store/eventBus';
@@ -31,13 +31,6 @@ function saveModelToHistory(model: string): void {
 function clearModelHistory(): void {
   localStorage.removeItem(MODEL_HISTORY_KEY);
 }
-
-const TASK_TYPES = [
-  { key: 'main_generation', label: '章节生成', description: '主要章节内容生成' },
-  { key: 'outline', label: '大纲/情节展开', description: '大纲内容展开为章节计划' },
-  { key: 'rewriting', label: '章节重写', description: '章节内容重新生成或改写' },
-  { key: 'character_generation', label: '角色/组织生成', description: '角色和组织信息自动生成' },
-];
 
 export default function SettingsPage() {
   const { token } = theme.useToken();
@@ -92,6 +85,11 @@ export default function SettingsPage() {
   // 任务路由相关状态
   const [taskRouting, setTaskRouting] = useState<Record<string, string | null>>({});
   const [savingTaskRouting, setSavingTaskRouting] = useState(false);
+  const [customTaskTypes, setCustomTaskTypes] = useState<Array<{ key: string; label: string; description: string }>>([]);
+  const [showCustomTaskForm, setShowCustomTaskForm] = useState(false);
+  const [newTaskKey, setNewTaskKey] = useState('');
+  const [newTaskLabel, setNewTaskLabel] = useState('');
+  const [newTaskDesc, setNewTaskDesc] = useState('');
 
   const pageBackground = `linear-gradient(180deg, ${token.colorBgLayout} 0%, ${token.colorFillSecondary} 100%)`;
   const headerBackground = `linear-gradient(135deg, ${token.colorPrimary} 0%, ${token.colorPrimaryHover} 100%)`;
@@ -139,6 +137,16 @@ export default function SettingsPage() {
           const parsed = JSON.parse(settings.task_model_config);
           if (typeof parsed === 'object' && parsed !== null) {
             setTaskRouting(parsed);
+          }
+        } catch { /* ignore */ }
+      }
+
+      // 解析自定义任务类型
+      if (settings.preferences) {
+        try {
+          const prefs = JSON.parse(settings.preferences);
+          if (prefs.custom_task_types && Array.isArray(prefs.custom_task_types)) {
+            setCustomTaskTypes(prefs.custom_task_types);
           }
         } catch { /* ignore */ }
       }
@@ -332,53 +340,29 @@ export default function SettingsPage() {
     });
   };
 
-  const mumuTextDefaultUrl = 'https://api.mumuverse.space/v1';
-  const mumuRegisterUrl = 'https://api.mumuverse.space/register?aff=4NN8';
-  const mumuCoverBaseUrlOptions = [
-    { value: 'https://api.mumuverse.space/v1beta', label: 'https://api.mumuverse.space/v1beta', defaultModel: 'gemini-3.1-flash-image-preview' },
-    { value: 'https://api.mumuverse.space/v1', label: 'https://api.mumuverse.space/v1', defaultModel: 'gpt-image-1.5' },
-  ];
-  const defaultCoverSettings = {
-    cover_enabled: false,
-    cover_api_provider: 'mumu',
-    cover_api_key: '',
-    cover_api_base_url: mumuCoverBaseUrlOptions[0].value,
-    cover_image_model: mumuCoverBaseUrlOptions[0].defaultModel,
-  };
+const defaultCoverSettings = {
+  cover_enabled: false,
+  cover_api_provider: 'gemini',
+  cover_api_key: '',
+  cover_api_base_url: 'https://generativelanguage.googleapis.com/v1beta',
+  cover_image_model: 'gemini-2.0-flash-exp-image-generation',
+};
 
-  const apiProviders = [
-    {
-      value: 'mumu',
-      label: 'MuMuのAPI',
-      defaultUrl: mumuTextDefaultUrl,
-      defaultModel: 'gemini-3-flash-preview'
-    },
-    { value: 'openai', label: 'OpenAI Compatible', defaultUrl: 'https://api.openai.com/v1' },
-    // { value: 'anthropic', label: 'Anthropic (Claude)', defaultUrl: 'https://api.anthropic.com' },
-    { value: 'gemini', label: 'Google Gemini', defaultUrl: 'https://generativelanguage.googleapis.com/v1beta' },
-  ];
+const apiProviders = [
+  { value: 'openai', label: 'OpenAI Compatible', defaultUrl: 'https://api.openai.com/v1' },
+  { value: 'anthropic', label: 'Anthropic (Claude)', defaultUrl: 'https://api.anthropic.com' },
+  { value: 'gemini', label: 'Google Gemini', defaultUrl: 'https://generativelanguage.googleapis.com/v1beta' },
+];
 
-  const selectedProvider = Form.useWatch('api_provider', form);
+const BUILTIN_TASK_TYPES = [
+  { key: 'main_generation', label: '章节生成', description: '主要章节内容生成' },
+  { key: 'outline', label: '大纲/情节展开', description: '大纲内容展开为章节计划' },
+  { key: 'rewriting', label: '章节重写', description: '章节内容重新生成或改写' },
+  { key: 'character_generation', label: '角色/组织生成', description: '角色和组织信息自动生成' },
+];
+
   const selectedCoverProvider = Form.useWatch('cover_api_provider', form);
   const selectedPresetProvider = Form.useWatch('api_provider', presetForm);
-
-  const handleProviderChange = (value: string) => {
-    const provider = apiProviders.find(p => p.value === value);
-    if (provider) {
-      const nextValues: Record<string, string> = {};
-      if (provider.defaultUrl) {
-        nextValues.api_base_url = provider.defaultUrl;
-      }
-      if (provider.value === 'mumu') {
-        nextValues.api_key = '';
-        nextValues.llm_model = provider.defaultModel || 'gemini-3-flash-preview';
-      }
-      form.setFieldsValue(nextValues);
-    }
-    // 清空模型列表，需要重新获取
-    setModelOptions([]);
-    setModelsFetched(false);
-  };
 
   const handleSaveTaskRouting = async () => {
     setSavingTaskRouting(true);
@@ -387,7 +371,15 @@ export default function SettingsPage() {
       for (const [k, v] of Object.entries(taskRouting)) {
         if (v) filtered[k] = v;
       }
-      await settingsApi.saveSettings({ task_model_config: JSON.stringify(filtered) });
+      // 同时保存自定义任务类型到 preferences
+      const prefs: Record<string, unknown> = {};
+      if (customTaskTypes.length > 0) {
+        prefs.custom_task_types = customTaskTypes;
+      }
+      await settingsApi.saveSettings({
+        task_model_config: JSON.stringify(filtered),
+        preferences: Object.keys(prefs).length > 0 ? JSON.stringify(prefs) : undefined,
+      });
       message.success('任务路由配置已保存');
     } catch {
       message.error('保存任务路由配置失败');
@@ -396,43 +388,45 @@ export default function SettingsPage() {
     }
   };
 
+  const handleAddCustomTaskType = () => {
+    if (!newTaskKey.trim() || !newTaskLabel.trim()) {
+      message.warning('请填写任务标识和名称');
+      return;
+    }
+    // 检查是否重复
+    const allKeys = [...BUILTIN_TASK_TYPES.map(t => t.key), ...customTaskTypes.map(t => t.key)];
+    if (allKeys.includes(newTaskKey.trim())) {
+      message.error('任务标识已存在');
+      return;
+    }
+    const newType = { key: newTaskKey.trim(), label: newTaskLabel.trim(), description: newTaskDesc.trim() };
+    setCustomTaskTypes(prev => [...prev, newType]);
+    setNewTaskKey('');
+    setNewTaskLabel('');
+    setNewTaskDesc('');
+    setShowCustomTaskForm(false);
+    message.success('已添加自定义任务类型');
+  };
+
+  const handleRemoveCustomTaskType = (key: string) => {
+    setCustomTaskTypes(prev => prev.filter(t => t.key !== key));
+    setTaskRouting(prev => {
+      const next = { ...prev };
+      delete next[key];
+      return next;
+    });
+  };
+
   const coverApiProviders = [
-    {
-      value: 'mumu',
-      label: 'MuMuのAPI',
-      defaultUrl: mumuCoverBaseUrlOptions[0].value,
-      defaultModel: mumuCoverBaseUrlOptions[0].defaultModel,
-    },
     { value: 'gemini', label: 'Google Gemini', defaultUrl: 'https://generativelanguage.googleapis.com/v1beta' },
     { value: 'grok', label: 'Grok', defaultUrl: 'https://api.x.ai/v1' },
   ];
 
   const handleCoverProviderChange = (value: string) => {
     const provider = coverApiProviders.find(p => p.value === value);
-    if (!provider) {
-      setCoverTestResult(null);
-      return;
+    if (provider && provider.defaultUrl) {
+      form.setFieldsValue({ cover_api_base_url: provider.defaultUrl });
     }
-
-    const nextValues: Record<string, string> = {};
-    if (provider.defaultUrl) {
-      nextValues.cover_api_base_url = provider.defaultUrl;
-    }
-    if (provider.value === 'mumu') {
-      nextValues.cover_api_key = '';
-      nextValues.cover_image_model = provider.defaultModel || mumuCoverBaseUrlOptions[0].defaultModel;
-    }
-
-    form.setFieldsValue(nextValues);
-    setCoverTestResult(null);
-  };
-
-  const handleMumuCoverBaseUrlChange = (value: string) => {
-    const option = mumuCoverBaseUrlOptions.find(item => item.value === value);
-    form.setFieldsValue({
-      cover_api_base_url: value,
-      cover_image_model: option?.defaultModel || mumuCoverBaseUrlOptions[0].defaultModel,
-    });
     setCoverTestResult(null);
   };
 
@@ -669,16 +663,8 @@ export default function SettingsPage() {
   // 预设编辑窗口：提供商变更时更新默认URL并清空模型列表
   const handlePresetProviderChange = (value: string) => {
     const provider = apiProviders.find(p => p.value === value);
-    if (provider) {
-      const nextValues: Record<string, string> = {};
-      if (provider.defaultUrl) {
-        nextValues.api_base_url = provider.defaultUrl;
-      }
-      if (provider.value === 'mumu') {
-        nextValues.api_key = '';
-        nextValues.llm_model = provider.defaultModel || 'gemini-3-flash-preview';
-      }
-      presetForm.setFieldsValue(nextValues);
+    if (provider && provider.defaultUrl) {
+      presetForm.setFieldsValue({ api_base_url: provider.defaultUrl });
     }
     // 清空模型列表，需要重新获取
     setPresetModelOptions([]);
@@ -968,12 +954,10 @@ export default function SettingsPage() {
     switch (provider) {
       case 'openai':
         return 'blue';
-      // case 'anthropic':
-      //   return 'purple';
+      case 'anthropic':
+        return 'purple';
       case 'gemini':
         return 'green';
-      case 'mumu':
-        return 'magenta';
       default:
         return 'default';
     }
@@ -1184,622 +1168,99 @@ export default function SettingsPage() {
                   children: (
                     <Space direction="vertical" size={isMobile ? 'middle' : 'large'} style={{ width: '100%' }}>
 
-                      {/* 默认配置提示 */}
-                      {isDefaultSettings && (
-                        <Alert
-                          message="使用 .env 文件中的默认配置"
-                          description={
-                            <div style={{ fontSize: isMobile ? '12px' : '14px' }}>
-                              <p style={{ margin: '8px 0' }}>
-                                当前显示的是从服务器 <code>.env</code> 文件读取的默认配置。
-                              </p>
-                              <p style={{ margin: '8px 0 0 0' }}>
-                                点击"保存设置"后，配置将保存到数据库并同步更新到 <code>.env</code> 文件。
-                              </p>
-                            </div>
-                          }
-                          type="info"
-                          showIcon
-                          style={{ marginBottom: isMobile ? 12 : 16 }}
-                        />
-                      )}
+                      <Alert
+                        type="info"
+                        showIcon
+                        message="预设管理"
+                        description="在「配置预设」Tab 中创建和管理 API 配置预设，然后在此处激活使用。"
+                      />
 
-                      {/* 已保存配置提示 */}
-                      {hasSettings && !isDefaultSettings && (
-                        <Alert
-                          message="使用已保存的个人配置"
-                          type="success"
-                          showIcon
-                          style={{ marginBottom: isMobile ? 12 : 16 }}
-                        />
-                      )}
-
-                      {/* 表单 */}
-                      <Spin spinning={initialLoading}>
-                        <Form
-                          form={form}
-                          layout="vertical"
-                          onFinish={handleSave}
-                          autoComplete="off"
-                        >
-                          <Form.Item name="api_provider" style={{ display: 'none' }}>
-                            <Input />
-                          </Form.Item>
-                          {/* 供应商卡片选择 */}
-                          <div style={{ marginBottom: 24 }}>
-                            <div style={{ marginBottom: 8, fontSize: 14, fontWeight: 500 }}>
-                              <Space size={4}>
-                                <span>API 提供商</span>
-                                <InfoCircleOutlined
-                                  title="选择你的AI服务提供商"
-                                  style={{ color: token.colorTextSecondary, fontSize: 14 }}
-                                />
-                              </Space>
-                            </div>
+                      <Spin spinning={initialLoading || presetsLoading}>
+                        {presets.length === 0 ? (
+                          <Empty
+                            description="暂无预设，请先前往「配置预设」Tab 创建"
+                            image={Empty.PRESENTED_IMAGE_SIMPLE}
+                            style={{ margin: '40px 0' }}
+                          >
+                            <Button type="primary" icon={<PlusOutlined />} onClick={() => setActiveTab('presets')}>
+                              前往创建预设
+                            </Button>
+                          </Empty>
+                        ) : (
+                          <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+                            {/* 预设列表卡片 */}
                             <Row gutter={[12, 12]}>
-                              {apiProviders.map(provider => {
-                                const isSelected = selectedProvider === provider.value;
+                              {presets.map(preset => {
+                                const isActive = preset.id === activePresetId;
                                 return (
-                                  <Col key={provider.value} xs={12} sm={8}>
+                                  <Col xs={24} sm={12} key={preset.id}>
                                     <div
-                                      onClick={() => {
-                                        form.setFieldValue('api_provider', provider.value);
-                                        handleProviderChange(provider.value);
-                                      }}
                                       style={{
-                                        padding: '12px 16px',
+                                        padding: '16px',
                                         borderRadius: 10,
-                                        border: `2px solid ${isSelected ? token.colorPrimary : token.colorBorderSecondary}`,
-                                        background: isSelected ? token.colorPrimaryBg : token.colorBgContainer,
-                                        cursor: 'pointer',
+                                        border: `2px solid ${isActive ? token.colorPrimary : token.colorBorderSecondary}`,
+                                        background: isActive ? token.colorPrimaryBg : token.colorBgContainer,
                                         transition: 'all 0.2s',
-                                        textAlign: 'center',
-                                        userSelect: 'none',
                                       }}
                                     >
-                                      <div style={{ fontSize: 22, marginBottom: 4 }}>
-                                        {provider.value === 'mumu' ? '🌸' :
-                                          provider.value === 'openai' ? '◯' : '◉'}
+                                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 12 }}>
+                                        <Space direction="vertical" size={4}>
+                                          <Space>
+                                            <Text strong style={{ fontSize: 15 }}>{preset.name}</Text>
+                                            {isActive && <Tag color="success">激活中</Tag>}
+                                          </Space>
+                                          {preset.description && (
+                                            <Text type="secondary" style={{ fontSize: 12 }}>{preset.description}</Text>
+                                          )}
+                                        </Space>
                                       </div>
-                                      <div style={{
-                                        fontSize: 13,
-                                        fontWeight: isSelected ? 600 : 400,
-                                        color: isSelected ? token.colorPrimary : token.colorText,
-                                      }}>
-                                        {provider.label}
+
+                                      <Space wrap style={{ marginBottom: 12 }}>
+                                        <Tag color={getProviderColor(preset.config.api_provider)}>
+                                          {preset.config.api_provider.toUpperCase()}
+                                        </Tag>
+                                        <Tag>{preset.config.llm_model}</Tag>
+                                        <Tag>温度: {preset.config.temperature}</Tag>
+                                        <Tag>Tokens: {preset.config.max_tokens}</Tag>
+                                      </Space>
+
+                                      {preset.config.api_base_url && (
+                                        <div style={{ fontSize: 12, color: token.colorTextTertiary, marginBottom: 12, wordBreak: 'break-all' }}>
+                                          地址: {preset.config.api_base_url}
+                                        </div>
+                                      )}
+
+                                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                        <Text type="secondary" style={{ fontSize: 11 }}>
+                                          创建于: {new Date(preset.created_at).toLocaleString()}
+                                        </Text>
+                                        {!isActive && (
+                                          <Button
+                                            type="primary"
+                                            size="small"
+                                            onClick={() => handlePresetActivate(preset.id, preset.name)}
+                                          >
+                                            激活此预设
+                                          </Button>
+                                        )}
                                       </div>
                                     </div>
                                   </Col>
                                 );
                               })}
                             </Row>
-                          </div>
 
-                          {selectedProvider === 'mumu' && (
-                            <Alert
-                              type="info"
-                              showIcon
-                              message="MuMuのAPI 专属供应商"
-                              description={
-                                <Space direction="vertical" size={8} style={{ width: '100%' }}>
-                                  <Text>
-                                    已自动填入专属地址，API Key 保持留空。免费注册后即可获取可用 Key。
-                                  </Text>
-                                  <div>
-                                    <Button
-                                      type="primary"
-                                      onClick={() => window.open(mumuRegisterUrl, '_blank', 'noopener,noreferrer')}
-                                    >
-                                      打开 MuMuのAPI 站点免费注册
-                                    </Button>
-                                  </div>
-                                </Space>
-                              }
-                              style={{ marginBottom: 16 }}
-                            />
-                          )}
-
-                          <Form.Item
-                            label={
-                              <Space size={4}>
-                                <span>API 密钥</span>
-                                <InfoCircleOutlined
-                                  title="你的API密钥，将加密存储"
-                                  style={{ color: token.colorTextSecondary, fontSize: isMobile ? '12px' : '14px' }}
-                                />
-                              </Space>
-                            }
-                            name="api_key"
-                            rules={[{ required: true, message: '请输入API密钥' }]}
-                          >
-                            <Input.Password
-                              size={isMobile ? 'middle' : 'large'}
-                              placeholder="sk-..."
-                              autoComplete="new-password"
-                            />
-                          </Form.Item>
-
-                          <Form.Item
-                            label={
-                              <Space size={4}>
-                                <span>API 地址</span>
-                                <InfoCircleOutlined
-                                  title="API的基础URL地址"
-                                  style={{ color: token.colorTextSecondary, fontSize: isMobile ? '12px' : '14px' }}
-                                />
-                              </Space>
-                            }
-                            name="api_base_url"
-                            rules={[
-                              { required: true, message: '请输入API地址' },
-                              () => ({
-                                validator(_rule, value) {
-                                  if (!value) return Promise.resolve();
-                                  // 接受 Docker 容器名（如 http://new-api:3000）的宽松 URL 校验
-                                  const urlPattern = /^https?:\/\/[a-zA-Z0-9._-]+(:\d+)?(\/[^\s]*)?$/;
-                                  if (!urlPattern.test(value.trim())) {
-                                    return Promise.reject(new Error('请输入有效的URL（例：http://new-api:3000）'));
-                                  }
-                                  return Promise.resolve();
-                                }
-                              })
-                            ]}
-                          >
-                            <Input
-                              size={isMobile ? 'middle' : 'large'}
-                              placeholder="https://api.openai.com/v1"
-                            />
-                          </Form.Item>
-
-                          <Form.Item
-                            label={
-                              <Space size={4}>
-                                <span>模型名称</span>
-                                <InfoCircleOutlined
-                                  title="AI模型的名称，如 gpt-4, gpt-3.5-turbo"
-                                  style={{ color: token.colorTextSecondary, fontSize: isMobile ? '12px' : '14px' }}
-                                />
-                              </Space>
-                            }
-                            name="llm_model"
-                            rules={[{ required: true, message: '请输入或选择模型名称' }]}
-                          >
-                            <Select
-                              size={isMobile ? 'middle' : 'large'}
-                              showSearch
-                              placeholder={isMobile ? "输入或选择模型" : "输入模型名称或点击获取"}
-                              optionFilterProp="label"
-                              loading={fetchingModels}
-                              onFocus={handleModelSelectFocus}
-                              onSearch={(value) => setModelSearchText(value)}
-                              onSelect={(value) => {
-                                setModelSearchText('');
-                                saveModelToHistory(value);
-                                setModelHistory(loadModelHistory());
-                              }}
-                              onBlur={() => setModelSearchText('')}
-                              filterOption={(input, option) => {
-                                // 手动输入的选项始终显示
-                                if (option?.value === input && !modelOptions.some(m => m.value === input)) return true;
-                                return (option?.label ?? '').toLowerCase().includes(input.toLowerCase()) ||
-                                  (option?.description ?? '').toLowerCase().includes(input.toLowerCase());
-                              }}
-                              dropdownRender={(menu) => (
-                                <>
-                                  {menu}
-                                  {modelHistory.length > 0 && !modelSearchText && !fetchingModels && (
-                                    <div style={{ padding: '4px 12px', borderTop: `1px solid ${token.colorBorderSecondary}`, display: 'flex', justifyContent: 'flex-end' }}>
-                                      <Button
-                                        type="link"
-                                        size="small"
-                                        icon={<ClearOutlined />}
-                                        onClick={(e) => {
-                                          e.stopPropagation();
-                                          clearModelHistory();
-                                          setModelHistory([]);
-                                          message.info('已清除模型历史记录');
-                                        }}
-                                        style={{ fontSize: '12px', color: token.colorTextSecondary }}
-                                      >
-                                        清除模型历史
-                                      </Button>
-                                    </div>
-                                  )}
-                                  {fetchingModels && (
-                                    <div style={{ padding: '8px 12px', color: token.colorTextSecondary, textAlign: 'center', fontSize: isMobile ? '12px' : '14px' }}>
-                                      <Spin size="small" /> 正在获取模型列表...
-                                    </div>
-                                  )}
-                                  {!fetchingModels && modelOptions.length === 0 && modelsFetched && !modelSearchText && (
-                                    <div style={{ padding: '8px 12px', color: token.colorError, textAlign: 'center', fontSize: isMobile ? '12px' : '14px' }}>
-                                      未能获取到模型列表，可直接输入模型名称
-                                    </div>
-                                  )}
-                                  {!fetchingModels && modelOptions.length === 0 && !modelsFetched && !modelSearchText && (
-                                    <div style={{ padding: '8px 12px', color: token.colorTextSecondary, textAlign: 'center', fontSize: isMobile ? '12px' : '14px' }}>
-                                      点击输入框自动获取，或直接输入模型名称
-                                    </div>
-                                  )}
-                                </>
-                              )}
-                              notFoundContent={
-                                fetchingModels ? (
-                                  <div style={{ padding: '8px 12px', textAlign: 'center', fontSize: isMobile ? '12px' : '14px' }}>
-                                    <Spin size="small" /> 加载中...
-                                  </div>
-                                ) : null
-                              }
-                              suffixIcon={
-                                !isMobile ? (
-                                  <div
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      if (!fetchingModels) {
-                                        setModelsFetched(false);
-                                        handleFetchModels(false);
-                                      }
-                                    }}
-                                    style={{
-                                      cursor: fetchingModels ? 'not-allowed' : 'pointer',
-                                      display: 'flex',
-                                      alignItems: 'center',
-                                      padding: '0 4px',
-                                      height: '100%',
-                                      marginRight: -8
-                                    }}
-                                    title="重新获取模型列表"
-                                  >
-                                    <Button
-                                      type="text"
-                                      size="small"
-                                      icon={<ReloadOutlined />}
-                                      loading={fetchingModels}
-                                      style={{ pointerEvents: 'none' }}
-                                    >
-                                      刷新
-                                    </Button>
-                                  </div>
-                                ) : undefined
-                              }
-                              options={(() => {
-                                const opts: Array<{ value: string; label: string; description: string }> = modelOptions.map(model => ({
-                                  value: model.value,
-                                  label: model.label,
-                                  description: model.description
-                                }));
-                                // 添加历史记录中的模型（不在 API 列表中的）
-                                modelHistory.forEach(hm => {
-                                  if (!opts.some(o => o.value.toLowerCase() === hm.toLowerCase())) {
-                                    opts.push({ value: hm, label: hm, description: '历史记录' });
-                                  }
-                                });
-                                // 如果用户输入了文本且不在已有选项中，添加手动输入选项
-                                if (modelSearchText && !opts.some(m =>
-                                  m.value.toLowerCase() === modelSearchText.toLowerCase() ||
-                                  m.label.toLowerCase() === modelSearchText.toLowerCase()
-                                )) {
-                                  opts.unshift({
-                                    value: modelSearchText,
-                                    label: modelSearchText,
-                                    description: '手动输入的模型名称'
-                                  });
-                                }
-                                return opts;
-                              })()}
-                              optionRender={(option) => (
-                                <div>
-                                  <div style={{ fontWeight: 500, fontSize: isMobile ? '13px' : '14px' }}>
-                                    {option.data.description === '手动输入的模型名称' ? (
-                                      <Space size={4}>
-                                        <EditOutlined style={{ color: token.colorPrimary }} />
-                                        <span>使用 "{option.data.label}"</span>
-                                      </Space>
-                                    ) : option.data.description === '历史记录' ? (
-                                      <Space size={4}>
-                                        <span style={{ color: token.colorTextSecondary }}>🕐</span>
-                                        <span>{option.data.label}</span>
-                                      </Space>
-                                    ) : option.data.label}
-                                  </div>
-                                  {option.data.description && option.data.description !== '手动输入的模型名称' && option.data.description !== '历史记录' && (
-                                    <div style={{ fontSize: isMobile ? '11px' : '12px', color: token.colorTextTertiary, marginTop: '2px' }}>
-                                      {option.data.description}
-                                    </div>
-                                  )}
-                                </div>
-                              )}
-                            />
-                          </Form.Item>
-
-                          <Form.Item
-                            label={
-                              <Space size={4}>
-                                <span>温度参数</span>
-                                <InfoCircleOutlined
-                                  title="控制输出的随机性，值越高越随机（0.0-2.0）"
-                                  style={{ color: token.colorTextSecondary, fontSize: isMobile ? '12px' : '14px' }}
-                                />
-                              </Space>
-                            }
-                            name="temperature"
-                          >
-                            <Slider
-                              min={0}
-                              max={2}
-                              step={0.1}
-                              marks={{
-                                0: { style: { fontSize: isMobile ? '11px' : '12px' }, label: '0.0' },
-                                0.7: { style: { fontSize: isMobile ? '11px' : '12px' }, label: '0.7' },
-                                1: { style: { fontSize: isMobile ? '11px' : '12px' }, label: '1.0' },
-                                2: { style: { fontSize: isMobile ? '11px' : '12px' }, label: '2.0' }
-                              }}
-                            />
-                          </Form.Item>
-
-                          <Form.Item
-                            label={
-                              <Space size={4}>
-                                <span>最大 Token 数</span>
-                                <InfoCircleOutlined
-                                  title="单次请求的最大token数量"
-                                  style={{ color: token.colorTextSecondary, fontSize: isMobile ? '12px' : '14px' }}
-                                />
-                              </Space>
-                            }
-                            name="max_tokens"
-                            rules={[
-                              { required: true, message: '请输入最大token数' },
-                              { type: 'number', min: 1, message: '请输入大于0的数字' }
-                            ]}
-                          >
-                            <InputNumber
-                              size={isMobile ? 'middle' : 'large'}
-                              style={{ width: '100%' }}
-                              min={1}
-                              placeholder="2000"
-                            />
-                          </Form.Item>
-
-                          <Form.Item
-                            label={
-                              <Space size={4}>
-                                <span>系统提示词</span>
-                                <InfoCircleOutlined
-                                  title="设置全局系统提示词，每次AI调用时都会自动使用。可用于设定AI的角色、语言风格等"
-                                  style={{ color: token.colorTextSecondary, fontSize: isMobile ? '12px' : '14px' }}
-                                />
-                              </Space>
-                            }
-                            name="system_prompt"
-                          >
-                            <TextArea
-                              rows={4}
-                              placeholder="例如：你是一个专业的小说创作助手，请用生动、细腻的文字进行创作..."
-                              maxLength={10000}
-                              showCount
-                              style={{ fontSize: isMobile ? '13px' : '14px' }}
-                            />
-                          </Form.Item>
-
-                          {/* 测试结果展示 */}
-                          {showTestResult && testResult && (
-                            <Alert
-                              message={
-                                <Space>
-                                  {testResult.success ? (
-                                    <CheckCircleOutlined style={{ color: token.colorSuccess, fontSize: isMobile ? '16px' : '18px' }} />
-                                  ) : (
-                                    <CloseCircleOutlined style={{ color: token.colorError, fontSize: isMobile ? '16px' : '18px' }} />
-                                  )}
-                                  <span style={{ fontSize: isMobile ? '14px' : '16px', fontWeight: 500 }}>
-                                    {testResult.message}
-                                  </span>
-                                </Space>
-                              }
-                              description={
-                                <div style={{ marginTop: 8 }}>
-                                  {testResult.success ? (
-                                    <Space direction="vertical" size="small" style={{ width: '100%' }}>
-                                      {testResult.response_time_ms && (
-                                        <div style={{ fontSize: isMobile ? '12px' : '14px' }}>
-                                          ⚡ 响应时间: <strong>{testResult.response_time_ms} ms</strong>
-                                        </div>
-                                      )}
-                                      {testResult.response_preview && (
-                                        <div style={{
-                                          fontSize: isMobile ? '12px' : '13px',
-                                          padding: '8px 12px',
-                                          background: token.colorSuccessBg,
-                                          borderRadius: '4px',
-                                          border: `1px solid ${token.colorSuccessBorder}`,
-                                          marginTop: '8px'
-                                        }}>
-                                          <div style={{ marginBottom: '4px', fontWeight: 500 }}>AI 响应预览:</div>
-                                          <div style={{ color: token.colorTextSecondary }}>{testResult.response_preview}</div>
-                                        </div>
-                                      )}
-                                      <div style={{ color: token.colorSuccess, fontSize: isMobile ? '12px' : '13px', marginTop: '4px' }}>
-                                        ✓ API 配置正确，可以正常使用
-                                      </div>
-                                    </Space>
-                                  ) : (
-                                    <Space direction="vertical" size="small" style={{ width: '100%' }}>
-                                      {testResult.error && (
-                                        <div style={{
-                                          fontSize: isMobile ? '12px' : '13px',
-                                          padding: '8px 12px',
-                                          background: token.colorErrorBg,
-                                          borderRadius: '4px',
-                                          border: `1px solid ${token.colorErrorBorder}`,
-                                          color: token.colorError
-                                        }}>
-                                          <strong>错误信息:</strong> {testResult.error}
-                                        </div>
-                                      )}
-                                      {testResult.error_type && (
-                                        <div style={{ fontSize: isMobile ? '11px' : '12px', color: token.colorTextSecondary }}>
-                                          错误类型: {testResult.error_type}
-                                        </div>
-                                      )}
-                                      {testResult.suggestions && testResult.suggestions.length > 0 && (
-                                        <div style={{ marginTop: '8px' }}>
-                                          <div style={{ fontSize: isMobile ? '12px' : '13px', fontWeight: 500, marginBottom: '4px' }}>
-                                            💡 解决建议:
-                                          </div>
-                                          <ul style={{
-                                            margin: 0,
-                                            paddingLeft: isMobile ? '16px' : '20px',
-                                            fontSize: isMobile ? '12px' : '13px',
-                                            color: token.colorTextSecondary
-                                          }}>
-                                            {testResult.suggestions.map((suggestion, index) => (
-                                              <li key={index} style={{ marginBottom: '4px' }}>{suggestion}</li>
-                                            ))}
-                                          </ul>
-                                        </div>
-                                      )}
-                                    </Space>
-                                  )}
-                                </div>
-                              }
-                              type={testResult.success ? 'success' : 'error'}
-                              closable
-                              onClose={() => setShowTestResult(false)}
-                              style={{ marginBottom: isMobile ? 16 : 24 }}
-                            />
-                          )}
-
-                          {/* 操作按钮 */}
-                          <Form.Item style={{ marginBottom: 0, marginTop: isMobile ? 24 : 32 }}>
-                            {isMobile ? (
-                              // 移动端：垂直堆叠布局
-                              <Space direction="vertical" size="middle" style={{ width: '100%' }}>
-                                <Button
-                                  type="primary"
-                                  size="large"
-                                  icon={<SaveOutlined />}
-                                  htmlType="submit"
-                                  loading={loading}
-                                  block
-                                  style={{
-                                    background: token.colorPrimary,
-                                    border: 'none',
-                                    height: '44px'
-                                  }}
-                                >
-                                  保存设置
-                                </Button>
-                                <Button
-                                  size="large"
-                                  icon={<ThunderboltOutlined />}
-                                  onClick={handleTestConnection}
-                                  loading={testingApi}
-                                  block
-                                  style={{
-                                    borderColor: token.colorSuccess,
-                                    color: token.colorSuccess,
-                                    fontWeight: 500,
-                                    height: '44px'
-                                  }}
-                                >
-                                  {testingApi ? '测试中...' : '测试连接'}
-                                </Button>
-                                <Space size="middle" style={{ width: '100%' }}>
-                                  <Button
-                                    size="large"
-                                    icon={<ReloadOutlined />}
-                                    onClick={handleReset}
-                                    style={{ flex: 1, height: '44px' }}
-                                  >
-                                    重置
-                                  </Button>
-                                  {hasSettings && (
-                                    <Button
-                                      danger
-                                      size="large"
-                                      icon={<DeleteOutlined />}
-                                      onClick={handleDelete}
-                                      loading={loading}
-                                      style={{ flex: 1, height: '44px' }}
-                                    >
-                                      删除
-                                    </Button>
-                                  )}
-                                </Space>
-                              </Space>
-                            ) : (
-                              // 桌面端：删除在左边，测试、重置和保存在右边
-                              <div style={{
-                                display: 'flex',
-                                justifyContent: 'space-between',
-                                alignItems: 'center',
-                                gap: '16px',
-                                flexWrap: 'wrap'
-                              }}>
-                                {/* 左侧：删除按钮 */}
-                                {hasSettings ? (
-                                  <Button
-                                    danger
-                                    size="large"
-                                    icon={<DeleteOutlined />}
-                                    onClick={handleDelete}
-                                    loading={loading}
-                                    style={{
-                                      minWidth: '100px'
-                                    }}
-                                  >
-                                    删除配置
-                                  </Button>
-                                ) : (
-                                  <div /> // 占位符，保持右侧按钮位置
-                                )}
-
-                                {/* 右侧：测试、重置和保存按钮组 */}
-                                <Space size="middle">
-                                  <Button
-                                    size="large"
-                                    icon={<ThunderboltOutlined />}
-                                    onClick={handleTestConnection}
-                                    loading={testingApi}
-                                    style={{
-                                      borderColor: token.colorSuccess,
-                                      color: token.colorSuccess,
-                                      fontWeight: 500,
-                                      minWidth: '100px'
-                                    }}
-                                  >
-                                    {testingApi ? '测试中...' : '测试'}
-                                  </Button>
-                                  <Button
-                                    size="large"
-                                    icon={<ReloadOutlined />}
-                                    onClick={handleReset}
-                                    style={{
-                                      minWidth: '100px'
-                                    }}
-                                  >
-                                    重置
-                                  </Button>
-                                  <Button
-                                    type="primary"
-                                    size="large"
-                                    icon={<SaveOutlined />}
-                                    htmlType="submit"
-                                    loading={loading}
-                                    style={{
-                                      background: token.colorPrimary,
-                                      border: 'none',
-                                      minWidth: '120px',
-                                      fontWeight: 500
-                                    }}
-                                  >
-                                    保存
-                                  </Button>
-                                </Space>
-                              </div>
-                            )}
-                          </Form.Item>
-                        </Form>
+                            {/* 快捷操作 */}
+                            <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+                              <Button icon={<PlusOutlined />} onClick={() => showPresetModal()}>
+                                新建预设
+                              </Button>
+                              <Button icon={<CopyOutlined />} onClick={handleCreateFromCurrent}>
+                                从当前配置创建
+                              </Button>
+                            </div>
+                          </Space>
+                        )}
                       </Spin>
                     </Space>
                   ),
@@ -1830,57 +1291,20 @@ export default function SettingsPage() {
                           </Select>
                         </Form.Item>
 
-                        {selectedCoverProvider === 'mumu' && (
-                          <Alert
-                            type="info"
-                            showIcon
-                            message="MuMuのAPI 专属适配器"
-                            description={
-                              <Space direction="vertical" size={8} style={{ width: '100%' }}>
-                                <Text>
-                                  已固定提供 MuMuのAPI 图片接口地址选项，切换地址时会自动带出推荐模型。API Key 需前往 MuMuのAPI 站点注册获取。
-                                </Text>
-                                <div>
-                                  <Button
-                                    type="primary"
-                                    onClick={() => window.open(mumuRegisterUrl, '_blank', 'noopener,noreferrer')}
-                                  >
-                                    打开 MuMuのAPI 站点免费注册
-                                  </Button>
-                                </div>
-                              </Space>
-                            }
-                            style={{ marginBottom: 16 }}
-                          />
-                        )}
-
                         <Form.Item label="封面图片 API Key" name="cover_api_key" rules={[{ required: true, message: '请输入封面图片 API Key' }]}>
-                          <Input.Password size={isMobile ? 'middle' : 'large'} placeholder={selectedCoverProvider === 'mumu' ? '请输入 MuMuのAPI Key' : '输入封面图片 API Key'} autoComplete="new-password" />
+                          <Input.Password size={isMobile ? 'middle' : 'large'} placeholder="输入封面图片 API Key" autoComplete="new-password" />
                         </Form.Item>
 
                         <Form.Item label="封面图片 API 地址" name="cover_api_base_url" rules={[{ type: 'url', message: '请输入有效的URL' }]}>
-                          {selectedCoverProvider === 'mumu' ? (
-                            <Select
-                              size={isMobile ? 'middle' : 'large'}
-                              onChange={handleMumuCoverBaseUrlChange}
-                              options={mumuCoverBaseUrlOptions.map(option => ({
-                                value: option.value,
-                                label: option.label,
-                              }))}
-                            />
-                          ) : (
-                            <Input size={isMobile ? 'middle' : 'large'} placeholder={selectedCoverProvider === 'grok' ? 'https://api.x.ai/v1' : 'https://generativelanguage.googleapis.com/v1beta'} />
-                          )}
+                          <Input size={isMobile ? 'middle' : 'large'} placeholder={selectedCoverProvider === 'grok' ? 'https://api.x.ai/v1' : 'https://generativelanguage.googleapis.com/v1beta'} />
                         </Form.Item>
 
                         <Form.Item label="封面图片模型" name="cover_image_model" rules={[{ required: true, message: '请输入封面图片模型名称' }]}>
                           <Input
                             size={isMobile ? 'middle' : 'large'}
-                            placeholder={selectedCoverProvider === 'mumu'
-                              ? '选择地址后自动填入推荐模型'
-                              : selectedCoverProvider === 'grok'
-                                ? 'grok-2-image'
-                                : 'gemini-2.0-flash-exp-image-generation'}
+                            placeholder={selectedCoverProvider === 'grok'
+                              ? 'grok-2-image'
+                              : 'gemini-2.0-flash-exp-image-generation'}
                           />
                         </Form.Item>
 
@@ -1938,7 +1362,8 @@ export default function SettingsPage() {
                         </Empty>
                       ) : (
                         <Space direction="vertical" size="middle" style={{ width: '100%' }}>
-                          {TASK_TYPES.map(task => {
+                          {[...BUILTIN_TASK_TYPES, ...(customTaskTypes || [])].map(task => {
+                            const isCustom = !BUILTIN_TASK_TYPES.find(t => t.key === task.key);
                             const selectedPresetId = taskRouting[task.key] || null;
                             const selectedPreset = presets.find(p => p.id === selectedPresetId);
                             return (
@@ -1952,7 +1377,10 @@ export default function SettingsPage() {
                                 background: selectedPresetId ? token.colorInfoBg : token.colorBgContainer,
                               }}>
                                 <div style={{ flex: '0 0 160px' }}>
-                                  <div style={{ fontWeight: 600, fontSize: 14 }}>{task.label}</div>
+                                  <div style={{ fontWeight: 600, fontSize: 14 }}>
+                                    {task.label}
+                                    {isCustom && <Tag color="orange" style={{ marginLeft: 6, fontSize: 10 }}>自定义</Tag>}
+                                  </div>
                                   <div style={{ fontSize: 12, color: token.colorTextTertiary, marginTop: 2 }}>{task.description}</div>
                                 </div>
                                 <div style={{ flex: 1 }}>
@@ -1976,9 +1404,46 @@ export default function SettingsPage() {
                                     </Tag>
                                   </Tooltip>
                                 )}
+                                {isCustom && (
+                                  <Popconfirm title="删除此自定义任务类型？" onConfirm={() => handleRemoveCustomTaskType(task.key)}>
+                                    <Button type="link" danger size="small" icon={<DeleteOutlined />} />
+                                  </Popconfirm>
+                                )}
                               </div>
                             );
                           })}
+
+                          {/* 添加自定义任务类型 */}
+                          {showCustomTaskForm ? (
+                            <div style={{
+                              padding: '14px 16px',
+                              border: `1px dashed ${token.colorPrimary}`,
+                              borderRadius: 10,
+                              background: token.colorPrimaryBg,
+                            }}>
+                              <Row gutter={12} align="middle">
+                                <Col span={6}>
+                                  <Input placeholder="任务标识（如 mcp_search）" value={newTaskKey} onChange={e => setNewTaskKey(e.target.value)} size="small" />
+                                </Col>
+                                <Col span={6}>
+                                  <Input placeholder="任务名称（如 MCP搜索）" value={newTaskLabel} onChange={e => setNewTaskLabel(e.target.value)} size="small" />
+                                </Col>
+                                <Col span={8}>
+                                  <Input placeholder="描述（可选）" value={newTaskDesc} onChange={e => setNewTaskDesc(e.target.value)} size="small" />
+                                </Col>
+                                <Col span={4}>
+                                  <Space>
+                                    <Button type="primary" size="small" onClick={handleAddCustomTaskType}>添加</Button>
+                                    <Button size="small" onClick={() => { setShowCustomTaskForm(false); setNewTaskKey(''); setNewTaskLabel(''); setNewTaskDesc(''); }}>取消</Button>
+                                  </Space>
+                                </Col>
+                              </Row>
+                            </div>
+                          ) : (
+                            <Button type="dashed" icon={<PlusOutlined />} onClick={() => setShowCustomTaskForm(true)} style={{ width: '100%' }}>
+                              添加自定义任务类型
+                            </Button>
+                          )}
 
                           <div style={{ textAlign: 'right', marginTop: 8 }}>
                             <Button
@@ -2049,35 +1514,11 @@ export default function SettingsPage() {
                   style={{ marginBottom: 16 }}
                 >
                   <Select placeholder="选择提供商" onChange={handlePresetProviderChange}>
-                    <Select.Option value="mumu">MuMuのAPI</Select.Option>
                     <Select.Option value="openai">OpenAI</Select.Option>
+                    <Select.Option value="anthropic">Anthropic (Claude)</Select.Option>
                     <Select.Option value="gemini">Google Gemini</Select.Option>
                   </Select>
                 </Form.Item>
-
-                {selectedPresetProvider === 'mumu' && (
-                  <Alert
-                    type="info"
-                    showIcon
-                    message="MuMuのAPI 专属供应商"
-                    description={
-                      <Space direction="vertical" size={8} style={{ width: '100%' }}>
-                        <Text>
-                          已自动填入专属地址，API Key 保持留空。免费注册后即可获取可用 Key。
-                        </Text>
-                        <div>
-                          <Button
-                            type="primary"
-                            onClick={() => window.open(mumuRegisterUrl, '_blank', 'noopener,noreferrer')}
-                          >
-                            打开 MuMuのAPI 站点免费注册
-                          </Button>
-                        </div>
-                      </Space>
-                    }
-                    style={{ marginBottom: 16 }}
-                  />
-                )}
               </Col>
             </Row>
 

@@ -19,6 +19,10 @@ services:
       - generated_covers:/app/storage/generated_covers
       - ./backend/.env:/app/.env:ro
     environment:
+      # 时区配置
+      - TZ=${TZ:-Asia/Shanghai}
+
+      # 应用配置
       - APP_NAME=${APP_NAME:-MuMuAINovel}
       - APP_PORT=8000
       - APP_HOST=${APP_HOST:-0.0.0.0}

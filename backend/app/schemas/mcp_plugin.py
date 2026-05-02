@@ -38,6 +38,7 @@ class MCPPluginSimpleCreate(BaseModel):
     config_json: str = Field(..., description="标准MCP配置JSON字符串")
     enabled: bool = Field(default=True, description="是否启用")
     category: str = Field(default="general", description="插件分类")
+    force_create: Optional[bool] = Field(default=False, description="是否强制创建（跳过Function Calling检测）")
 
 
 class MCPPluginUpdate(BaseModel):

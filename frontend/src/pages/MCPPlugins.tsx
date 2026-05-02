@@ -180,13 +180,25 @@ export default function MCPPluginsPage() {
         title: '模型能力检查',
         centered: true,
         icon: <WarningOutlined />,
-        content: '为了确保 MCP 插件正常工作，您当前使用的 AI 模型必须支持 Function Calling（工具调用）能力。请先进行模型支持检测。',
+        content: modelSupportStatus === 'unsupported'
+          ? (
+            <div>
+              <p>当前 AI 模型不支持 Function Calling（工具调用）能力，MCP 插件可能无法正常工作。</p>
+              <p style={{ marginTop: 8, color: '#ff4d4f' }}>强制添加后，插件将无法正常使用，直到切换到支持 Function Calling 的模型。</p>
+            </div>
+          )
+          : '为了确保 MCP 插件正常工作，您当前使用的 AI 模型必须支持 Function Calling（工具调用）能力。请先进行模型支持检测。',
         okText: '去检测',
-        cancelText: '取消',
+        cancelText: modelSupportStatus === 'unsupported' ? '仍要添加' : '取消',
+        onCancel: modelSupportStatus === 'unsupported' ? proceedCreateWithForce : undefined,
         onOk: handleCheckFunctionCalling,
       });
       return;
     }
+    proceedCreateWithForce();
+  };
+
+  const proceedCreateWithForce = () => {
     setEditingPlugin(null);
     form.resetFields();
     form.setFieldsValue({
@@ -586,6 +598,7 @@ export default function MCPPluginsPage() {
         config_json: values.config_json,
         enabled: values.enabled,
         category: values.category || 'general',
+        force_create: modelSupportStatus === 'unsupported',
       };
 
       // 统一使用简化API，后端会自动判断是创建还是更新

@@ -20,6 +20,7 @@ from app.schemas.settings import (
     APIKeyPreset, APIKeyPresetConfig, PresetCreateRequest,
     PresetUpdateRequest, PresetResponse, PresetListResponse,
     ChapterAnalysisPresetSelectionRequest,
+    ModelRouting, ModelRoutingRequest,
     SystemSMTPSettingsResponse, SystemSMTPSettingsUpdate, SMTPTestRequest
 )
 from app.user_manager import User
@@ -134,6 +135,17 @@ def _get_chapter_analysis_preset_id(prefs: Dict[str, Any]) -> Optional[str]:
     """读取章节内容分析专用API预设ID。"""
     preset_id = prefs.get('chapter_analysis_preset_id')
     return preset_id if isinstance(preset_id, str) and preset_id.strip() else None
+
+
+def _get_model_routing(prefs: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """读取模型路由配置。"""
+    routing = prefs.get('model_routing')
+    if not isinstance(routing, dict):
+        return None
+    return {
+        'planning_model_id': routing.get('planning_model_id') if isinstance(routing.get('planning_model_id'), str) else None,
+        'execution_model_id': routing.get('execution_model_id') if isinstance(routing.get('execution_model_id'), str) else None,
+    }
 
 
 def _build_ai_service_from_config(
@@ -299,22 +311,43 @@ async def get_user_ai_service_from_db_by_usage(
     mcp_plugins = mcp_result.scalars().all()
     enable_mcp = any(plugin.enabled for plugin in mcp_plugins) if mcp_plugins else False
 
-    if usage == "chapter_analysis":
-        prefs = _safe_load_preferences(settings.preferences)
-        api_presets = _get_api_presets_payload(prefs)
-        presets = api_presets.get('presets', [])
-        preset_id = _get_chapter_analysis_preset_id(prefs)
+    prefs = _safe_load_preferences(settings.preferences)
+    api_presets = _get_api_presets_payload(prefs)
+    presets = api_presets.get('presets', [])
+
+    if usage in ("chapter_analysis", "planning", "analysis"):
+        # 规划/分析类任务使用 planning_model_id
+        preset_id = _get_chapter_analysis_preset_id(prefs) if usage == "chapter_analysis" else None
+        if not preset_id:
+            model_routing = _get_model_routing(prefs)
+            preset_id = model_routing.get('planning_model_id') if model_routing else None
         if preset_id:
             target_preset = next((p for p in presets if p.get('id') == preset_id), None)
             if target_preset and isinstance(target_preset.get('config'), dict):
-                logger.info(f"用户 {user_id} 使用章节内容分析专用API预设: {target_preset.get('name')}")
+                logger.info(f"用户 {user_id} 使用{usage}专用API预设: {target_preset.get('name')}")
                 return _build_ai_service_from_config(
                     config=target_preset['config'],
                     user_id=user_id,
                     db=db,
                     enable_mcp=enable_mcp,
                 )
-            logger.warning(f"用户 {user_id} 配置的章节内容分析预设不存在，回退默认API配置: {preset_id}")
+            if preset_id:
+                logger.warning(f"用户 {user_id} 配置的{usage}预设不存在，回退默认API配置: {preset_id}")
+    elif usage == "execution":
+        # 执行类任务使用 execution_model_id
+        model_routing = _get_model_routing(prefs)
+        preset_id = model_routing.get('execution_model_id') if model_routing else None
+        if preset_id:
+            target_preset = next((p for p in presets if p.get('id') == preset_id), None)
+            if target_preset and isinstance(target_preset.get('config'), dict):
+                logger.info(f"用户 {user_id} 使用执行任务专用API预设: {target_preset.get('name')}")
+                return _build_ai_service_from_config(
+                    config=target_preset['config'],
+                    user_id=user_id,
+                    db=db,
+                    enable_mcp=enable_mcp,
+                )
+            logger.warning(f"用户 {user_id} 配置的执行预设不存在，回退默认API配置: {preset_id}")
 
     return create_user_ai_service_with_mcp(
         api_provider=settings.api_provider,
@@ -896,9 +929,11 @@ async def check_function_calling_support(data: ApiTestRequest):
     
     try:
         start_time = time.time()
-        
-        # 定义一个简单的测试工具（天气查询）
-        test_tools = [{
+
+        # 根据 provider 选择工具格式
+        # OpenAI 格式：{"type": "function", "function": {...}}
+        # Anthropic 格式：{"name": ..., "input_schema": {...}}
+        openai_tools = [{
             "type": "function",
             "function": {
                 "name": "get_weather",
@@ -920,15 +955,36 @@ async def check_function_calling_support(data: ApiTestRequest):
                 }
             }
         }]
-        
-        # 测试提示：故意设计一个需要调用工具的问题
-        test_prompt = "请告诉我北京现在的天气情况如何？"
-        
+
+        anthropic_tools = [{
+            "name": "get_weather",
+            "description": "获取指定城市的当前天气信息",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "city": {
+                        "type": "string",
+                        "description": "城市名称，例如：北京、上海、深圳"
+                    },
+                    "unit": {
+                        "type": "string",
+                        "enum": ["celsius", "fahrenheit"],
+                        "description": "温度单位"
+                    }
+                },
+                "required": ["city"]
+            }
+        }]
+
+        # 选择对应的工具格式
+        test_tools = anthropic_tools if provider == "anthropic" else openai_tools
+
         logger.info(f"🧪 开始检测 Function Calling 支持")
         logger.info(f"  - 提供商: {provider}")
         logger.info(f"  - 模型: {llm_model}")
         logger.info(f"  - 测试工具: get_weather")
-        
+        logger.info(f"  - 工具格式: {'anthropic' if provider == 'anthropic' else 'openai'}")
+
         # 创建临时 AI 服务实例进行测试
         test_service = AIService(
             api_provider=provider,
@@ -938,7 +994,7 @@ async def check_function_calling_support(data: ApiTestRequest):
             default_temperature=0.3,  # 使用较低温度以获得更确定的行为
             default_max_tokens=200
         )
-        
+
         # 发送带工具的测试请求
         response = await test_service.generate_text(
             prompt=test_prompt,
@@ -950,37 +1006,37 @@ async def check_function_calling_support(data: ApiTestRequest):
             tool_choice="auto",  # 让模型自动决定是否使用工具
             auto_mcp=False  # 禁用 MCP 自动加载
         )
-        
+
         end_time = time.time()
         response_time = round((end_time - start_time) * 1000, 2)
-        
+
         # 分析响应以确定是否支持 Function Calling
         supported = False
         finish_reason = None
         tool_calls = None
         response_content = None
-        
+
         if isinstance(response, dict):
             # 检查 finish_reason（OpenAI 标准）
             finish_reason = response.get("finish_reason")
-            
+
             # 检查是否有 tool_calls
             if "tool_calls" in response and response["tool_calls"]:
                 supported = True
                 tool_calls = response["tool_calls"]
                 logger.info(f"✅ 检测到工具调用: {len(tool_calls)} 个")
-            
+
             # 记录返回的内容（如果有）
             if "content" in response:
                 response_content = response["content"]
         elif isinstance(response, str):
             # 如果只返回字符串，说明不支持工具调用
             response_content = response
-        
+
         logger.info(f"  - 响应时间: {response_time}ms")
         logger.info(f"  - finish_reason: {finish_reason}")
         logger.info(f"  - 支持状态: {'✅ 支持' if supported else '❌ 不支持'}")
-        
+
         # 构建详细的返回信息
         result = {
             "success": True,
@@ -998,7 +1054,7 @@ async def check_function_calling_support(data: ApiTestRequest):
                 "response_type": "tool_calls" if supported else "text"
             }
         }
-        
+
         # 添加工具调用详情
         if tool_calls:
             result["tool_calls"] = tool_calls
@@ -1015,7 +1071,7 @@ async def check_function_calling_support(data: ApiTestRequest):
                 "推荐模型：GPT-4 系列、GPT-4-turbo、Claude 3 Opus/Sonnet、Gemini 1.5 Pro 等",
                 "说明：模型返回了文本回复而非工具调用，表明不支持该功能"
             ]
-        
+
         return result
         
     except ValueError as e:
@@ -1318,12 +1374,13 @@ async def get_presets(
     )
     
     logger.info(f"用户 {user.user_id} 获取预设列表，共 {len(presets)} 个")
-    
+
     return {
         "presets": presets,
         "total": len(presets),
         "active_preset_id": active_preset_id,
-        "chapter_analysis_preset_id": chapter_analysis_preset_id
+        "chapter_analysis_preset_id": chapter_analysis_preset_id,
+        "model_routing": _get_model_routing(prefs)
     }
 
 
@@ -1558,6 +1615,52 @@ async def set_chapter_analysis_preset_selection(
         "message": "章节内容分析API配置已更新",
         "chapter_analysis_preset_id": preset_id,
         "preset_name": preset_name
+    }
+
+
+@router.put("/presets/usage/model-routing")
+async def set_model_routing(
+    data: ModelRoutingRequest,
+    user: User = Depends(require_login),
+    db: AsyncSession = Depends(get_db)
+):
+    """设置模型路由配置，规划/分析任务和执行任务分别使用不同的预设。"""
+    settings = await get_user_settings(user.user_id, db)
+    prefs = _safe_load_preferences(settings.preferences)
+    api_presets = _get_api_presets_payload(prefs)
+    presets = api_presets.get('presets', [])
+
+    planning_id = data.planning_model_id.strip() if data.planning_model_id else None
+    execution_id = data.execution_model_id.strip() if data.execution_model_id else None
+
+    if planning_id:
+        target_preset = next((p for p in presets if p.get('id') == planning_id), None)
+        if not target_preset:
+            raise HTTPException(status_code=404, detail="规划的预设不存在")
+    if execution_id:
+        target_preset = next((p for p in presets if p.get('id') == execution_id), None)
+        if not target_preset:
+            raise HTTPException(status_code=404, detail="执行的预设不存在")
+
+    model_routing = {}
+    if planning_id:
+        model_routing['planning_model_id'] = planning_id
+    if execution_id:
+        model_routing['execution_model_id'] = execution_id
+
+    if model_routing:
+        prefs['model_routing'] = model_routing
+    else:
+        prefs.pop('model_routing', None)
+
+    prefs['api_presets'] = api_presets
+    settings.preferences = json.dumps(prefs, ensure_ascii=False)
+    await db.commit()
+
+    logger.info(f"用户 {user.user_id} 设置模型路由: planning={planning_id}, execution={execution_id}")
+    return {
+        "message": "模型路由配置已更新",
+        "model_routing": _get_model_routing(prefs)
     }
 
 

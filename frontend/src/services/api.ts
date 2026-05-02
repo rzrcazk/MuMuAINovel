@@ -64,6 +64,8 @@ import type {
 interface MCPPluginSimpleCreate {
   config_json: string;
   enabled: boolean;
+  category?: string;
+  force_create?: boolean;
 }
 
 const api = axios.create({
@@ -318,6 +320,12 @@ export const settingsApi = {
   setChapterAnalysisPresetSelection: (presetId?: string) =>
     api.put<unknown, { message: string; chapter_analysis_preset_id?: string; preset_name?: string }>('/settings/presets/usage/chapter-analysis', {
       preset_id: presetId || null,
+    }),
+
+  setModelRouting: (planning_model_id?: string, execution_model_id?: string) =>
+    api.put<unknown, { message: string; model_routing?: import('../types').ModelRouting }>('/settings/presets/usage/model-routing', {
+      planning_model_id: planning_model_id || null,
+      execution_model_id: execution_model_id || null,
     }),
 
   createPresetFromCurrent: (name: string, description?: string) =>

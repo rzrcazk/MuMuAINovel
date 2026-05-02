@@ -72,6 +72,64 @@ def _get_api_presets_payload(prefs: Dict[str, Any]) -> Dict[str, Any]:
     return api_presets
 
 
+def _merge_cover_provider_config(settings: Settings) -> Dict[str, Any]:
+    """
+    将当前激活的封面 provider 配置从 preferences.cover_providers 合并到返回字段。
+    优先使用 preferences 中的 provider 专属配置。
+    """
+    prefs = _safe_load_preferences(settings.preferences)
+    cover_providers = prefs.get('cover_providers', {})
+    provider_key = (settings.cover_api_provider or "").lower().strip()
+    provider_config = cover_providers.get(provider_key, {})
+
+    result = {}
+    # 优先用 preferences 中当前 provider 的配置，覆盖 Settings 表字段
+    if provider_config.get("api_key"):
+        result["cover_api_key"] = provider_config["api_key"]
+    elif settings.cover_api_key:
+        result["cover_api_key"] = settings.cover_api_key
+
+    if provider_config.get("api_base_url"):
+        result["cover_api_base_url"] = provider_config["api_base_url"]
+    elif settings.cover_api_base_url:
+        result["cover_api_base_url"] = settings.cover_api_base_url
+
+    if provider_config.get("model"):
+        result["cover_image_model"] = provider_config["model"]
+    elif settings.cover_image_model:
+        result["cover_image_model"] = settings.cover_image_model
+
+    return result
+
+
+def _save_cover_provider_config(
+    settings: Settings,
+    cover_provider: str,
+    api_key: Optional[str],
+    api_base_url: Optional[str],
+    model: Optional[str],
+) -> None:
+    """
+    将指定封面 provider 的配置保存到 preferences.cover_providers。
+    """
+    prefs = _safe_load_preferences(settings.preferences)
+    cover_providers = prefs.get('cover_providers', {})
+    provider_key = (cover_provider or "").lower().strip()
+
+    if provider_key not in cover_providers:
+        cover_providers[provider_key] = {}
+
+    if api_key is not None:
+        cover_providers[provider_key]["api_key"] = api_key
+    if api_base_url is not None:
+        cover_providers[provider_key]["api_base_url"] = api_base_url
+    if model is not None:
+        cover_providers[provider_key]["model"] = model
+
+    prefs['cover_providers'] = cover_providers
+    settings.preferences = json.dumps(prefs, ensure_ascii=False)
+
+
 def _get_chapter_analysis_preset_id(prefs: Dict[str, Any]) -> Optional[str]:
     """读取章节内容分析专用API预设ID。"""
     preset_id = prefs.get('chapter_analysis_preset_id')
@@ -302,7 +360,43 @@ async def get_settings(
         logger.info(f"用户 {user.user_id} 的设置已从.env同步到数据库")
     
     logger.info(f"用户 {user.user_id} 获取已保存的设置")
-    return settings
+
+    # 合并封面 provider 专属配置（从 preferences 读取）
+    merged_cover = _merge_cover_provider_config(settings)
+    # 用干净的方式构造响应，避免 SQLAlchemy 内部字段
+    response_dict = {
+        "id": settings.id,
+        "user_id": settings.user_id,
+        "api_provider": settings.api_provider,
+        "api_key": settings.api_key,
+        "api_base_url": settings.api_base_url,
+        "llm_model": settings.llm_model,
+        "temperature": settings.temperature,
+        "max_tokens": settings.max_tokens,
+        "system_prompt": settings.system_prompt,
+        "cover_api_provider": settings.cover_api_provider,
+        "cover_api_key": merged_cover.get("cover_api_key", settings.cover_api_key),
+        "cover_api_base_url": merged_cover.get("cover_api_base_url", settings.cover_api_base_url),
+        "cover_image_model": merged_cover.get("cover_image_model", settings.cover_image_model),
+        "cover_enabled": settings.cover_enabled,
+        "smtp_provider": settings.smtp_provider,
+        "smtp_host": settings.smtp_host,
+        "smtp_port": settings.smtp_port,
+        "smtp_username": settings.smtp_username,
+        "smtp_password": settings.smtp_password,
+        "smtp_use_tls": settings.smtp_use_tls,
+        "smtp_use_ssl": settings.smtp_use_ssl,
+        "smtp_from_email": settings.smtp_from_email,
+        "smtp_from_name": settings.smtp_from_name,
+        "email_auth_enabled": settings.email_auth_enabled,
+        "email_register_enabled": settings.email_register_enabled,
+        "verification_code_ttl_minutes": settings.verification_code_ttl_minutes,
+        "verification_resend_interval_seconds": settings.verification_resend_interval_seconds,
+        "preferences": settings.preferences,
+        "created_at": settings.created_at,
+        "updated_at": settings.updated_at,
+    }
+    return SettingsResponse.model_validate(response_dict)
 
 
 @router.post("/cover/test")
@@ -490,7 +584,16 @@ async def save_settings(
                     logger.info(f"用户 {user.user_id} 手动修改配置，已取消预设 {active_preset.get('name')} 的激活状态")
         except (json.JSONDecodeError, TypeError) as e:
             logger.warning(f"解析用户 {user.user_id} 的preferences失败: {e}")
-        
+
+        # 保存当前封面 provider 的独立配置到 preferences
+        _save_cover_provider_config(
+            settings=settings,
+            cover_provider=settings_dict.get("cover_api_provider") or settings.cover_api_provider or "",
+            api_key=settings_dict.get("cover_api_key"),
+            api_base_url=settings_dict.get("cover_api_base_url"),
+            model=settings_dict.get("cover_image_model"),
+        )
+
         await db.commit()
         await db.refresh(settings)
         logger.info(f"用户 {user.user_id} 更新设置")
@@ -500,12 +603,54 @@ async def save_settings(
             user_id=user.user_id,
             **settings_dict
         )
+        # 保存当前封面 provider 的独立配置到 preferences
+        _save_cover_provider_config(
+            settings=settings,
+            cover_provider=settings_dict.get("cover_api_provider") or "gpt-image",
+            api_key=settings_dict.get("cover_api_key"),
+            api_base_url=settings_dict.get("cover_api_base_url"),
+            model=settings_dict.get("cover_image_model"),
+        )
         db.add(settings)
         await db.commit()
         await db.refresh(settings)
         logger.info(f"用户 {user.user_id} 创建设置")
-    
-    return settings
+
+    # 返回前合并封面 provider 专属配置
+    merged_cover = _merge_cover_provider_config(settings)
+    response_dict = {
+        "id": settings.id,
+        "user_id": settings.user_id,
+        "api_provider": settings.api_provider,
+        "api_key": settings.api_key,
+        "api_base_url": settings.api_base_url,
+        "llm_model": settings.llm_model,
+        "temperature": settings.temperature,
+        "max_tokens": settings.max_tokens,
+        "system_prompt": settings.system_prompt,
+        "cover_api_provider": settings.cover_api_provider,
+        "cover_api_key": merged_cover.get("cover_api_key", settings.cover_api_key),
+        "cover_api_base_url": merged_cover.get("cover_api_base_url", settings.cover_api_base_url),
+        "cover_image_model": merged_cover.get("cover_image_model", settings.cover_image_model),
+        "cover_enabled": settings.cover_enabled,
+        "smtp_provider": settings.smtp_provider,
+        "smtp_host": settings.smtp_host,
+        "smtp_port": settings.smtp_port,
+        "smtp_username": settings.smtp_username,
+        "smtp_password": settings.smtp_password,
+        "smtp_use_tls": settings.smtp_use_tls,
+        "smtp_use_ssl": settings.smtp_use_ssl,
+        "smtp_from_email": settings.smtp_from_email,
+        "smtp_from_name": settings.smtp_from_name,
+        "email_auth_enabled": settings.email_auth_enabled,
+        "email_register_enabled": settings.email_register_enabled,
+        "verification_code_ttl_minutes": settings.verification_code_ttl_minutes,
+        "verification_resend_interval_seconds": settings.verification_resend_interval_seconds,
+        "preferences": settings.preferences,
+        "created_at": settings.created_at,
+        "updated_at": settings.updated_at,
+    }
+    return SettingsResponse.model_validate(response_dict)
 
 
 @router.put("", response_model=SettingsResponse)
@@ -530,12 +675,55 @@ async def update_settings(
     update_data = data.model_dump(exclude_unset=True)
     for key, value in update_data.items():
         setattr(settings, key, value)
-    
+
+    # 保存当前封面 provider 的独立配置到 preferences
+    _save_cover_provider_config(
+        settings=settings,
+        cover_provider=update_data.get("cover_api_provider") or settings.cover_api_provider or "",
+        api_key=update_data.get("cover_api_key"),
+        api_base_url=update_data.get("cover_api_base_url"),
+        model=update_data.get("cover_image_model"),
+    )
+
     await db.commit()
     await db.refresh(settings)
     logger.info(f"用户 {user.user_id} 更新设置")
-    
-    return settings
+
+    # 返回前合并封面 provider 专属配置
+    merged_cover = _merge_cover_provider_config(settings)
+    response_dict = {
+        "id": settings.id,
+        "user_id": settings.user_id,
+        "api_provider": settings.api_provider,
+        "api_key": settings.api_key,
+        "api_base_url": settings.api_base_url,
+        "llm_model": settings.llm_model,
+        "temperature": settings.temperature,
+        "max_tokens": settings.max_tokens,
+        "system_prompt": settings.system_prompt,
+        "cover_api_provider": settings.cover_api_provider,
+        "cover_api_key": merged_cover.get("cover_api_key", settings.cover_api_key),
+        "cover_api_base_url": merged_cover.get("cover_api_base_url", settings.cover_api_base_url),
+        "cover_image_model": merged_cover.get("cover_image_model", settings.cover_image_model),
+        "cover_enabled": settings.cover_enabled,
+        "smtp_provider": settings.smtp_provider,
+        "smtp_host": settings.smtp_host,
+        "smtp_port": settings.smtp_port,
+        "smtp_username": settings.smtp_username,
+        "smtp_password": settings.smtp_password,
+        "smtp_use_tls": settings.smtp_use_tls,
+        "smtp_use_ssl": settings.smtp_use_ssl,
+        "smtp_from_email": settings.smtp_from_email,
+        "smtp_from_name": settings.smtp_from_name,
+        "email_auth_enabled": settings.email_auth_enabled,
+        "email_register_enabled": settings.email_register_enabled,
+        "verification_code_ttl_minutes": settings.verification_code_ttl_minutes,
+        "verification_resend_interval_seconds": settings.verification_resend_interval_seconds,
+        "preferences": settings.preferences,
+        "created_at": settings.created_at,
+        "updated_at": settings.updated_at,
+    }
+    return SettingsResponse.model_validate(response_dict)
 
 
 @router.delete("")

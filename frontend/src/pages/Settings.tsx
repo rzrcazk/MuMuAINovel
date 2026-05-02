@@ -60,6 +60,7 @@ export default function SettingsPage() {
   const [fetchingPresetModels, setFetchingPresetModels] = useState(false);
   const [presetModelsFetched, setPresetModelsFetched] = useState(false);
   const [presetModelSearchText, setPresetModelSearchText] = useState('');
+  const [coverProviders, setCoverProviders] = useState<Record<string, { api_key?: string; api_base_url?: string; model?: string }>>({});
 
   const pageBackground = `linear-gradient(180deg, ${token.colorBgLayout} 0%, ${token.colorFillSecondary} 100%)`;
   const headerBackground = `linear-gradient(135deg, ${token.colorPrimary} 0%, ${token.colorPrimaryHover} 100%)`;
@@ -98,6 +99,14 @@ export default function SettingsPage() {
         cover_image_model: settings.cover_image_model || defaultCoverSettings.cover_image_model,
         cover_enabled: settings.cover_enabled ?? defaultCoverSettings.cover_enabled,
       });
+
+      // 解析 preferences 中的 cover_providers 配置
+      try {
+        const prefs = settings.preferences ? JSON.parse(settings.preferences) : {};
+        setCoverProviders(prefs.cover_providers || {});
+      } catch {
+        setCoverProviders({});
+      }
 
       // 判断是否为默认设置（id='0'表示来自.env的默认配置）
       if (settings.id === '0' || !settings.id) {
@@ -152,7 +161,10 @@ export default function SettingsPage() {
       message.success('设置已保存');
       setHasSettings(true);
       setIsDefaultSettings(false);
-      
+
+      // 保存后刷新 settings 以同步 cover_providers 等偏好设置
+      await loadSettings();
+
       // 保存后清除测试结果，因为配置可能已变更
       setTestResult(null);
       setShowTestResult(false);
@@ -284,35 +296,21 @@ export default function SettingsPage() {
     });
   };
 
-  const mumuTextDefaultUrl = 'https://api.mumuverse.space/v1';
-  const mumuRegisterUrl = 'https://api.mumuverse.space/register?aff=4NN8';
-  const mumuCoverBaseUrlOptions = [
-    { value: 'https://api.mumuverse.space/v1beta', label: 'https://api.mumuverse.space/v1beta', defaultModel: 'gemini-3.1-flash-image-preview' },
-    { value: 'https://api.mumuverse.space/v1', label: 'https://api.mumuverse.space/v1', defaultModel: 'gpt-image-1.5' },
-  ];
   const defaultCoverSettings = {
     cover_enabled: false,
-    cover_api_provider: 'mumu',
+    cover_api_provider: 'gpt-image',
     cover_api_key: '',
-    cover_api_base_url: mumuCoverBaseUrlOptions[0].value,
-    cover_image_model: mumuCoverBaseUrlOptions[0].defaultModel,
+    cover_api_base_url: 'https://api.openai.com/v1',
+    cover_image_model: 'dall-e-3',
   };
 
   const apiProviders = [
-    {
-      value: 'mumu',
-      label: 'MuMuのAPI',
-      defaultUrl: mumuTextDefaultUrl,
-      defaultModel: 'gemini-3-flash-preview'
-    },
     { value: 'openai', label: 'OpenAI Compatible', defaultUrl: 'https://api.openai.com/v1' },
-    // { value: 'anthropic', label: 'Anthropic (Claude)', defaultUrl: 'https://api.anthropic.com' },
+    { value: 'anthropic', label: 'Anthropic (Claude)', defaultUrl: 'https://api.anthropic.com' },
     { value: 'gemini', label: 'Google Gemini', defaultUrl: 'https://generativelanguage.googleapis.com/v1beta' },
   ];
 
-  const selectedProvider = Form.useWatch('api_provider', form);
   const selectedCoverProvider = Form.useWatch('cover_api_provider', form);
-  const selectedPresetProvider = Form.useWatch('api_provider', presetForm);
 
   const handleProviderChange = (value: string) => {
     const provider = apiProviders.find(p => p.value === value);
@@ -320,10 +318,6 @@ export default function SettingsPage() {
       const nextValues: Record<string, string> = {};
       if (provider.defaultUrl) {
         nextValues.api_base_url = provider.defaultUrl;
-      }
-      if (provider.value === 'mumu') {
-        nextValues.api_key = '';
-        nextValues.llm_model = provider.defaultModel || 'gemini-3-flash-preview';
       }
       form.setFieldsValue(nextValues);
     }
@@ -333,14 +327,11 @@ export default function SettingsPage() {
   };
 
   const coverApiProviders = [
-    {
-      value: 'mumu',
-      label: 'MuMuのAPI',
-      defaultUrl: mumuCoverBaseUrlOptions[0].value,
-      defaultModel: mumuCoverBaseUrlOptions[0].defaultModel,
-    },
-    { value: 'gemini', label: 'Google Gemini', defaultUrl: 'https://generativelanguage.googleapis.com/v1beta' },
-    { value: 'grok', label: 'Grok', defaultUrl: 'https://api.x.ai/v1' },
+    { value: 'gpt-image', label: 'OpenAI DALL-E', defaultUrl: 'https://api.openai.com/v1' },
+    { value: 'qwen2api-image', label: 'Qwen2API Image', defaultUrl: 'http://qwen2api:7860' },
+    { value: 'jimeng-image', label: 'Jimeng Image', defaultUrl: 'http://jimeng-api:8000' },
+    { value: 'gemini', label: 'Google Gemini', defaultUrl: 'https://generativelanguage.googleapis.com' },
+    { value: 'grok', label: 'xAI Grok', defaultUrl: 'https://api.x.ai' },
   ];
 
   const handleCoverProviderChange = (value: string) => {
@@ -350,25 +341,22 @@ export default function SettingsPage() {
       return;
     }
 
+    const savedConfig = coverProviders[value];
     const nextValues: Record<string, string> = {};
-    if (provider.defaultUrl) {
-      nextValues.cover_api_base_url = provider.defaultUrl;
-    }
-    if (provider.value === 'mumu') {
+
+    if (savedConfig) {
+      // 使用该 provider 之前保存的配置
+      nextValues.cover_api_key = savedConfig.api_key || '';
+      nextValues.cover_api_base_url = savedConfig.api_base_url || provider.defaultUrl || '';
+      nextValues.cover_image_model = savedConfig.model || '';
+    } else {
+      // 该 provider 从未配置过，清空并使用默认 base_url
       nextValues.cover_api_key = '';
-      nextValues.cover_image_model = provider.defaultModel || mumuCoverBaseUrlOptions[0].defaultModel;
+      nextValues.cover_api_base_url = provider.defaultUrl || '';
+      nextValues.cover_image_model = '';
     }
 
     form.setFieldsValue(nextValues);
-    setCoverTestResult(null);
-  };
-
-  const handleMumuCoverBaseUrlChange = (value: string) => {
-    const option = mumuCoverBaseUrlOptions.find(item => item.value === value);
-    form.setFieldsValue({
-      cover_api_base_url: value,
-      cover_image_model: option?.defaultModel || mumuCoverBaseUrlOptions[0].defaultModel,
-    });
     setCoverTestResult(null);
   };
 
@@ -610,10 +598,6 @@ export default function SettingsPage() {
       const nextValues: Record<string, string> = {};
       if (provider.defaultUrl) {
         nextValues.api_base_url = provider.defaultUrl;
-      }
-      if (provider.value === 'mumu') {
-        nextValues.api_key = '';
-        nextValues.llm_model = provider.defaultModel || 'gemini-3-flash-preview';
       }
       presetForm.setFieldsValue(nextValues);
     }
@@ -923,8 +907,6 @@ export default function SettingsPage() {
       //   return 'purple';
       case 'gemini':
         return 'green';
-      case 'mumu':
-        return 'magenta';
       default:
         return 'default';
     }
@@ -1228,30 +1210,6 @@ export default function SettingsPage() {
                             </Select>
                           </Form.Item>
 
-                          {selectedProvider === 'mumu' && (
-                            <Alert
-                              type="info"
-                              showIcon
-                              message="MuMuのAPI 专属供应商"
-                              description={
-                                <Space direction="vertical" size={8} style={{ width: '100%' }}>
-                                  <Text>
-                                    已自动填入专属地址，API Key 保持留空。免费注册后即可获取可用 Key。
-                                  </Text>
-                                  <div>
-                                    <Button
-                                      type="primary"
-                                      onClick={() => window.open(mumuRegisterUrl, '_blank', 'noopener,noreferrer')}
-                                    >
-                                      打开 MuMuのAPI 站点免费注册
-                                    </Button>
-                                  </div>
-                                </Space>
-                              }
-                              style={{ marginBottom: 16 }}
-                            />
-                          )}
-
                           <Form.Item
                             label={
                               <Space size={4}>
@@ -1283,10 +1241,21 @@ export default function SettingsPage() {
                               </Space>
                             }
                             name="api_base_url"
-                            rules={[
-                              { required: true, message: '请输入API地址' },
-                              { type: 'url', message: '请输入有效的URL' }
-                            ]}
+                            rules={[{
+                              required: true,
+                              message: '请输入API地址',
+                            }, {
+                              validator: (_, value) => {
+                                if (!value) return Promise.resolve();
+                                // 支持 http://、https:// 以及容器内部地址
+                                const urlPattern = /^(https?:\/\/)?([a-zA-Z0-9]([a-zA-Z0-9\-\.]*[a-zA-Z0-9])?(\:[0-9]+)?)(\/[^\s]*)?$/;
+                                if (!urlPattern.test(value)) {
+                                  return Promise.reject('请输入有效的URL');
+                                }
+                                return Promise.resolve();
+                              },
+                              message: '请输入有效的URL'
+                            }]}
                           >
                             <Input
                               size={isMobile ? 'middle' : 'large'}
@@ -1740,57 +1709,38 @@ export default function SettingsPage() {
                           </Select>
                         </Form.Item>
 
-                        {selectedCoverProvider === 'mumu' && (
-                          <Alert
-                            type="info"
-                            showIcon
-                            message="MuMuのAPI 专属适配器"
-                            description={
-                              <Space direction="vertical" size={8} style={{ width: '100%' }}>
-                                <Text>
-                                  已固定提供 MuMuのAPI 图片接口地址选项，切换地址时会自动带出推荐模型。API Key 需前往 MuMuのAPI 站点注册获取。
-                                </Text>
-                                <div>
-                                  <Button
-                                    type="primary"
-                                    onClick={() => window.open(mumuRegisterUrl, '_blank', 'noopener,noreferrer')}
-                                  >
-                                    打开 MuMuのAPI 站点免费注册
-                                  </Button>
-                                </div>
-                              </Space>
-                            }
-                            style={{ marginBottom: 16 }}
-                          />
-                        )}
-
                         <Form.Item label="封面图片 API Key" name="cover_api_key" rules={[{ required: true, message: '请输入封面图片 API Key' }]}>
-                          <Input.Password size={isMobile ? 'middle' : 'large'} placeholder={selectedCoverProvider === 'mumu' ? '请输入 MuMuのAPI Key' : '输入封面图片 API Key'} autoComplete="new-password" />
+                          <Input.Password size={isMobile ? 'middle' : 'large'} placeholder="输入封面图片 API Key" autoComplete="new-password" />
                         </Form.Item>
 
-                        <Form.Item label="封面图片 API 地址" name="cover_api_base_url" rules={[{ type: 'url', message: '请输入有效的URL' }]}>
-                          {selectedCoverProvider === 'mumu' ? (
-                            <Select
-                              size={isMobile ? 'middle' : 'large'}
-                              onChange={handleMumuCoverBaseUrlChange}
-                              options={mumuCoverBaseUrlOptions.map(option => ({
-                                value: option.value,
-                                label: option.label,
-                              }))}
-                            />
-                          ) : (
-                            <Input size={isMobile ? 'middle' : 'large'} placeholder={selectedCoverProvider === 'grok' ? 'https://api.x.ai/v1' : 'https://generativelanguage.googleapis.com/v1beta'} />
-                          )}
+                        <Form.Item label="封面图片 API 地址" name="cover_api_base_url"
+                          rules={[{
+                            validator: (_, value) => {
+                              if (!value) return Promise.reject('请输入API地址');
+                              // 支持 http://、https:// 以及容器内部地址如 jimeng-api:8000
+                              const urlPattern = /^(https?:\/\/)?([a-zA-Z0-9]([a-zA-Z0-9\-\.]*[a-zA-Z0-9])?(\:[0-9]+)?)(\/[^\s]*)?$/;
+                              if (!urlPattern.test(value)) {
+                                return Promise.reject('请输入有效的URL');
+                              }
+                              return Promise.resolve();
+                            },
+                            message: '请输入有效的URL'
+                          }]}>
+                          <Input size={isMobile ? 'middle' : 'large'} placeholder={selectedCoverProvider === 'jimeng-image'
+                            ? 'http://jimeng-api:8000'
+                            : selectedCoverProvider === 'qwen2api-image'
+                            ? 'http://qwen2api:7860'
+                            : 'https://api.openai.com/v1'} />
                         </Form.Item>
 
                         <Form.Item label="封面图片模型" name="cover_image_model" rules={[{ required: true, message: '请输入封面图片模型名称' }]}>
                           <Input
                             size={isMobile ? 'middle' : 'large'}
-                            placeholder={selectedCoverProvider === 'mumu'
-                              ? '选择地址后自动填入推荐模型'
-                              : selectedCoverProvider === 'grok'
-                                ? 'grok-2-image'
-                                : 'gemini-2.0-flash-exp-image-generation'}
+                            placeholder={selectedCoverProvider === 'jimeng-image'
+                              ? 'jimeng-5.0'
+                              : selectedCoverProvider === 'qwen2api-image'
+                              ? 'qwen3.6-plus'
+                              : 'dall-e-3'}
                           />
                         </Form.Item>
 
@@ -1878,35 +1828,11 @@ export default function SettingsPage() {
                   style={{ marginBottom: 16 }}
                 >
                   <Select placeholder="选择提供商" onChange={handlePresetProviderChange}>
-                    <Select.Option value="mumu">MuMuのAPI</Select.Option>
                     <Select.Option value="openai">OpenAI</Select.Option>
+                    <Select.Option value="anthropic">Anthropic</Select.Option>
                     <Select.Option value="gemini">Google Gemini</Select.Option>
                   </Select>
                 </Form.Item>
-
-                {selectedPresetProvider === 'mumu' && (
-                  <Alert
-                    type="info"
-                    showIcon
-                    message="MuMuのAPI 专属供应商"
-                    description={
-                      <Space direction="vertical" size={8} style={{ width: '100%' }}>
-                        <Text>
-                          已自动填入专属地址，API Key 保持留空。免费注册后即可获取可用 Key。
-                        </Text>
-                        <div>
-                          <Button
-                            type="primary"
-                            onClick={() => window.open(mumuRegisterUrl, '_blank', 'noopener,noreferrer')}
-                          >
-                            打开 MuMuのAPI 站点免费注册
-                          </Button>
-                        </div>
-                      </Space>
-                    }
-                    style={{ marginBottom: 16 }}
-                  />
-                )}
               </Col>
             </Row>
 
@@ -1935,6 +1861,18 @@ export default function SettingsPage() {
                 <Form.Item
                   name="api_base_url"
                   label="API Base URL"
+                  rules={[{
+                    validator: (_, value) => {
+                      if (!value) return Promise.resolve();
+                      // 支持 http://、https:// 以及容器内部地址
+                      const urlPattern = /^(https?:\/\/)?([a-zA-Z0-9]([a-zA-Z0-9\-\.]*[a-zA-Z0-9])?(\:[0-9]+)?)(\/[^\s]*)?$/;
+                      if (!urlPattern.test(value)) {
+                        return Promise.reject('请输入有效的URL');
+                      }
+                      return Promise.resolve();
+                    },
+                    message: '请输入有效的URL'
+                  }]}
                   style={{ marginBottom: 16 }}
                 >
                   <Input placeholder="https://api.openai.com/v1" />

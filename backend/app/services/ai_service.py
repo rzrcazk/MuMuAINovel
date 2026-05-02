@@ -28,9 +28,7 @@ logger = get_logger(__name__)
 
 
 def normalize_provider(provider: Optional[str]) -> Optional[str]:
-    """标准化 provider 名称，兼容渠道别名。"""
-    if provider == "mumu":
-        return "openai"
+    """标准化 provider 名称。"""
     return provider
 
 

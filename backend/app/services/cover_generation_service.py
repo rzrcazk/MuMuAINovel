@@ -18,6 +18,9 @@ from app.logger import get_logger
 from app.models.project import Project
 from app.models.settings import Settings
 from app.services.cover_providers.base_cover_provider import BaseCoverProvider, CoverGenerationResult
+from app.services.cover_providers.gpt_image_cover_provider import GptImageCoverProvider
+from app.services.cover_providers.qwen2api_image_cover_provider import Qwen2ApiImageCoverProvider
+from app.services.cover_providers.jimeng_image_cover_provider import JimengImageCoverProvider
 from app.services.cover_providers.gemini_cover_provider import GeminiCoverProvider
 from app.services.cover_providers.grok_cover_provider import GrokCoverProvider
 from app.services.prompt_service import PromptService
@@ -71,9 +74,13 @@ class CoverGenerationService:
 
         try:
             provider = self._build_provider(settings)
+            cover_providers_config = self._get_cover_providers_config(settings)
+            provider_key = (settings.cover_api_provider or "").lower().strip()
+            provider_config = cover_providers_config.get(provider_key, {})
+            model = provider_config.get("model") or settings.cover_image_model or ""
             result = await provider.generate_cover(
                 prompt=prompt,
-                model=settings.cover_image_model or "",
+                model=model,
                 width=COVER_WIDTH,
                 height=COVER_HEIGHT,
             )
@@ -141,6 +148,13 @@ class CoverGenerationService:
             "Create a clean fantasy novel cover illustration, vertical book cover, "
             "standard 2:3 ratio, atmospheric lighting, no text, no watermark."
         )
+
+        # 打印请求详情（用于调试）
+        logger.info(
+            "🧪 测试封面接口 | provider=%s base_url=%s model=%s",
+            provider, api_base_url or "(默认)", model
+        )
+
         try:
             await provider_instance.generate_cover(
                 prompt=test_prompt,
@@ -150,8 +164,15 @@ class CoverGenerationService:
             )
         except httpx.HTTPStatusError as exc:
             detail = self._extract_upstream_error_detail(exc)
+            logger.error(
+                "❌ 封面接口测试失败 | provider=%s base_url=%s model=%s status=%s detail=%s",
+                provider, api_base_url or "(默认)", model,
+                exc.response.status_code if exc.response else None,
+                detail,
+            )
             raise HTTPException(status_code=exc.response.status_code, detail=detail) from exc
 
+        logger.info("✅ 封面接口测试成功 | provider=%s model=%s", provider, model)
         return CoverTestResult(
             success=True,
             message="封面图片接口测试成功",
@@ -206,11 +227,28 @@ class CoverGenerationService:
             raise HTTPException(status_code=400, detail="封面图片配置不完整，请前往设置页补全")
 
     def _build_provider(self, settings: Settings) -> BaseCoverProvider:
+        # 优先从 preferences.cover_providers 取当前 provider 的独立配置
+        cover_providers_config = self._get_cover_providers_config(settings)
+        provider_key = (settings.cover_api_provider or "").lower().strip()
+        provider_config = cover_providers_config.get(provider_key, {})
+
+        api_key = provider_config.get("api_key") or settings.cover_api_key or ""
+        api_base_url = provider_config.get("api_base_url") or settings.cover_api_base_url
+
         return self._build_provider_from_values(
             provider=settings.cover_api_provider or "",
-            api_key=settings.cover_api_key or "",
-            api_base_url=settings.cover_api_base_url,
+            api_key=api_key,
+            api_base_url=api_base_url,
         )
+
+    @staticmethod
+    def _get_cover_providers_config(settings: Settings) -> dict:
+        """从 preferences JSON 中解析 cover_providers 配置"""
+        try:
+            prefs = json.loads(settings.preferences or "{}")
+            return prefs.get("cover_providers", {})
+        except (json.JSONDecodeError, TypeError):
+            return {}
 
     def _build_provider_from_values(
         self,
@@ -221,15 +259,17 @@ class CoverGenerationService:
     ) -> BaseCoverProvider:
         provider_value = (provider or "").lower().strip()
         normalized_base_url = (api_base_url or "").rstrip("/")
+        if provider_value == "gpt-image":
+            return GptImageCoverProvider(api_key=api_key, base_url=normalized_base_url)
+        if provider_value == "qwen2api-image":
+            return Qwen2ApiImageCoverProvider(api_key=api_key, base_url=normalized_base_url)
+        if provider_value == "jimeng-image":
+            return JimengImageCoverProvider(api_key=api_key, base_url=normalized_base_url)
         if provider_value == "gemini":
             return GeminiCoverProvider(api_key=api_key, base_url=normalized_base_url)
         if provider_value == "grok":
             return GrokCoverProvider(api_key=api_key, base_url=normalized_base_url)
-        if provider_value == "mumu":
-            if normalized_base_url.endswith("/v1beta"):
-                return GeminiCoverProvider(api_key=api_key, base_url=normalized_base_url)
-            return GrokCoverProvider(api_key=api_key, base_url=normalized_base_url or "https://api.mumuverse.space/v1")
-        raise HTTPException(status_code=400, detail="当前版本仅支持 Gemini、Grok 或 MuMuのAPI 作为封面图片 Provider")
+        raise HTTPException(status_code=400, detail="当前版本仅支持 gpt-image、qwen2api-image、jimeng-image、 Gemini 或 Grok 作为封面图片 Provider")
 
     def _save_cover_file(
         self,

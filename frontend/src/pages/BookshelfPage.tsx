@@ -1,4 +1,4 @@
-import { Card, Button, Spin, Space, Tag, Typography, Alert, theme } from 'antd';
+import { Card, Button, Spin, Space, Tag, Typography, theme } from 'antd';
 import { BookOutlined, RocketOutlined, BulbOutlined, UploadOutlined, DownloadOutlined, LoadingOutlined, CalendarOutlined, DeleteOutlined, CheckCircleOutlined, EditOutlined, PauseCircleOutlined, PictureOutlined, SwapOutlined, ReloadOutlined } from '@ant-design/icons';
 import { useState } from 'react';
 import type { ReactNode } from 'react';
@@ -12,12 +12,9 @@ interface BookshelfPageProps {
   isMobile: boolean;
   loading: boolean;
   projects: Project[];
-  showApiTip: boolean;
-  setShowApiTip: (show: boolean) => void;
   exportableProjectsCount: number;
   onOpenImportModal: () => void;
   onOpenExportModal: () => void;
-  onGoSettings: () => void;
   onStartWizard: () => void;
   onOpenInspiration: () => void;
   onEnterProject: (project: Project) => void;
@@ -36,12 +33,9 @@ export default function BookshelfPage({
   isMobile,
   loading,
   projects,
-  showApiTip,
-  setShowApiTip,
   exportableProjectsCount,
   onOpenImportModal,
   onOpenExportModal,
-  onGoSettings,
   onStartWizard,
   onOpenInspiration,
   onEnterProject,
@@ -217,41 +211,7 @@ export default function BookshelfPage({
         </div>
       </Card>
 
-      {showApiTip && projects.length === 0 && (
-        <Alert
-          message="欢迎使用 MuMuAINovel"
-          description={
-            <div style={{
-              display: 'flex',
-              flexDirection: isMobile ? 'column' : 'row',
-              alignItems: isMobile ? 'flex-start' : 'center',
-              gap: isMobile ? 12 : 16,
-              justifyContent: 'space-between'
-            }}>
-              <span style={{ fontSize: isMobile ? 12 : 14 }}>
-                在开始创作之前，请先配置您的AI接口（支持 OpenAI / Anthropic）。
-              </span>
-              <Button
-                size="small"
-                type="primary"
-                onClick={onGoSettings}
-                style={{ flexShrink: 0 }}
-              >
-                去配置
-              </Button>
-            </div>
-          }
-          type="info"
-          showIcon
-          closable
-          onClose={() => setShowApiTip(false)}
-          style={{
-            marginBottom: isMobile ? 16 : 24,
-            borderRadius: 12
-          }}
-        />
-      )}
-
+      
       <Spin spinning={loading}>
         <div style={{
           ...bookshelfCardStyles.container,

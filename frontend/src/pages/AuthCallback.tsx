@@ -8,8 +8,8 @@ export default function AuthCallback() {
   const navigate = useNavigate();
   const [status, setStatus] = useState<'loading' | 'success' | 'error'>('loading');
   const [errorMessage, setErrorMessage] = useState('');
-  const [showAnnouncement, setShowAnnouncement] = useState(false);
   const [showPasswordModal, setShowPasswordModal] = useState(false);
+  const [showAnnouncement, setShowAnnouncement] = useState(false);
   const { token } = theme.useToken();
   const alphaColor = (color: string, alpha: number) => `color-mix(in srgb, ${color} ${(alpha * 100).toFixed(0)}%, transparent)`;
   interface PasswordStatus {
@@ -138,13 +138,11 @@ export default function AuthCallback() {
   };
 
   const handleDoNotShowToday = () => {
-    // 设置今日不再显示
     const today = new Date().toDateString();
     localStorage.setItem('announcement_hide_today', today);
   };
 
   const handleNeverShow = () => {
-    // 设置永久不再显示
     localStorage.setItem('announcement_hide_forever', 'true');
   };
 
@@ -308,7 +306,7 @@ export default function AuthCallback() {
         <Result
           status="success"
           title="登录成功"
-          subTitle={showPasswordModal ? "请设置账号密码..." : (showAnnouncement ? "欢迎使用..." : "正在跳转...")}
+          subTitle={showPasswordModal ? "请设置账号密码..." : "正在跳转..."}
           style={{ background: alphaColor(token.colorBgContainer, 0.96), padding: 40, borderRadius: 8 }}
         />
       </div>
